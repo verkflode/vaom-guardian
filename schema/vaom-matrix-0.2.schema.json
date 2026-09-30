@@ -1,0 +1,854 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:matrix:0.2",
+  "title": "VAOM Delegation Authority Matrix",
+  "description": "A machine-readable Delegation Authority Matrix. Engine-agnostic: nothing here names a wire protocol, policy engine or agent host. Compilers map it to those targets. Passing this schema is necessary but not sufficient: a matrix is accepted only if it also passes the matrix linter, which checks what JSON Schema cannot (reference integrity, uniqueness, cross-field arithmetic). A matrix that fails either check is treated as missing, and a missing matrix grants nothing. There is no draft mode: an incomplete or unapproved matrix does not validate. Rows are of three kinds: delegable and non-delegable decisions, and preparatory rows for calls that decide nothing (reading, drafting for a human) in service of a decision row. Draft 0.2: adds preparatory rows to the frozen 0.1.",
+  "type": "object",
+  "required": ["format", "id", "version", "title", "approval", "roles", "rows"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "format": {
+      "const": "vaom.matrix/0.2",
+      "description": "Format identifier and version of this schema. Readers reject formats they do not know."
+    },
+    "id": {
+      "$ref": "#/$defs/identifier",
+      "description": "Stable identifier for this matrix across versions, e.g. 'acme.ap.invoice'."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+      "description": "Semantic version. Every decision record cites (id, version). Any change to a band, limit, threshold, lease or boundary is at least a minor bump."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "effective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from"],
+      "properties": {
+        "from": { "type": "string", "format": "date-time" },
+        "until": {
+          "type": "string",
+          "format": "date-time",
+          "description": "After this instant the matrix grants nothing. Evaluators treat an expired matrix as missing."
+        }
+      }
+    },
+    "approval": {
+      "$ref": "#/$defs/approvalRef",
+      "description": "Sign-off by the role that holds authority for the workflow."
+    },
+    "roles": {
+      "type": "object",
+      "description": "Human roles referenced by rows, keyed by role id. Roles, never named people: the matrix is a design record and is often shared.",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "boundaries": {
+      "type": "object",
+      "description": "Boundaries that rows rely on, keyed by boundary id. Each states its intended mechanism and how it is verified. Actual strength is evidence, not configuration, so it is not recorded here.",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/boundary" }
+    },
+    "oversight": { "$ref": "#/$defs/workflowOversight" },
+    "circuitBreakers": {
+      "type": "array",
+      "description": "Breakers that apply to every row in the matrix.",
+      "items": { "$ref": "#/$defs/circuitBreaker" }
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/row" }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Any delegable row consumes reviewer time, so funded reviewer hours must be declared. A matrix of only non-delegable rows needs none.",
+      "if": {
+        "properties": {
+          "rows": { "contains": { "properties": { "authority": { "properties": { "kind": { "const": "delegable" } } } } } }
+        }
+      },
+      "then": { "required": ["oversight"] }
+    }
+  ],
+
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "roleRef": {
+      "$ref": "#/$defs/identifier",
+      "description": "A key of the top-level 'roles' object. JSON Schema cannot check this; the matrix linter must, and an unresolved reference rejects the whole matrix."
+    },
+    "boundaryRef": {
+      "$ref": "#/$defs/identifier",
+      "description": "A key of the top-level 'boundaries' object. JSON Schema cannot check this; the matrix linter must, and an unresolved reference rejects the whole matrix."
+    },
+    "rowRef": {
+      "$ref": "#/$defs/identifier",
+      "description": "The id of a row in this matrix. JSON Schema cannot check this; the matrix linter must, and an unresolved reference rejects the whole matrix."
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$",
+      "description": "ISO 8601 duration, e.g. 'PT60M', 'P30D'."
+    },
+    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)(\\.\\d+)?$",
+          "description": "Decimal string, not a JSON number, so limits survive every parser exactly."
+        },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$", "description": "ISO 4217 code." }
+      }
+    },
+    "band": {
+      "enum": ["A", "B", "C"],
+      "description": "A: auto-execute. B: human review before execution. C: escalation to a senior or specialist role."
+    },
+    "restrictiveBand": {
+      "enum": ["B", "C", "non-delegable"],
+      "description": "A band a limit or restriction can push a decision to. Never A: limits only narrow. B and C still let the agent execute once the named approver approves. 'non-delegable' means the agent never executes this request, whatever any approver says: a human decides and acts outside the agent. The row's pattern is unchanged for other requests, and any preparation for the human happens under capabilities the agent already holds, never under the restricted one."
+    },
+    "approvalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "date"],
+      "properties": {
+        "role": { "$ref": "#/$defs/roleRef" },
+        "date": { "type": "string", "format": "date" },
+        "ref": { "type": "string", "description": "Pointer to the approval evidence (ticket, minutes, signed document)." }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "kind": {
+          "enum": ["human", "committee"],
+          "default": "human",
+          "description": "A committee can hold a consent right (requiredApprovals) but never accountability."
+        }
+      }
+    },
+
+    "condition": {
+      "description": "A predicate over facts the evaluator extracts from a request. Missing facts make the condition unevaluable, which never resolves to a wider band.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all"],
+          "properties": { "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": { "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fact", "op", "value"],
+          "properties": {
+            "fact": { "$ref": "#/$defs/identifier" },
+            "op": { "enum": ["eq", "ne", "in", "gt", "gte", "lt", "lte"] },
+            "value": {}
+          }
+        }
+      ]
+    },
+
+    "profile": {
+      "type": "object",
+      "description": "Authority Decomposition profile. Recorded so the band can be argued, and linted: some profiles cannot reach Band A.",
+      "additionalProperties": false,
+      "required": ["reversibility", "consequenceScope", "regulatoryExposure", "confidenceMeasurability", "accountabilityClarity"],
+      "properties": {
+        "reversibility": {
+          "enum": ["fully-reversible", "reversible-with-friction", "partially-reversible", "irreversible"],
+          "description": "fully-reversible: undone at negligible cost. reversible-with-friction: undone with effort or coordination. partially-reversible: consequences mitigated, not unwound. irreversible: cannot be undone."
+        },
+        "consequenceScope": {
+          "enum": ["internal-operational", "internal-financial", "external-relational", "external-regulatory"],
+          "description": "internal-operational: internal workflow only. internal-financial: internal financial position. external-relational: an outside party's experience or relationship. external-regulatory: regulatory standing or obligations."
+        },
+        "regulatoryExposure": {
+          "enum": ["none", "general-context", "regulated-decision", "prohibited-from-full-automation"],
+          "description": "none: no direct regulatory exposure. general-context: inside a regulated process, not itself regulated. regulated-decision: regulation governs how it is made. prohibited-from-full-automation: regulation requires meaningful human involvement."
+        },
+        "confidenceMeasurability": {
+          "enum": ["quantifiable", "partially-quantifiable", "judgment-dependent"],
+          "description": "quantifiable: numeric confidence signals exist. partially-quantifiable: some aspects scored, overall judgment qualitative. judgment-dependent: cannot be reduced to a score."
+        },
+        "accountabilityClarity": {
+          "enum": ["clear-single-owner", "shared-defined-boundaries", "ambiguous", "none"],
+          "description": "clear-single-owner: one role unambiguously accountable. shared-defined-boundaries: shared with clear delineation. ambiguous: unclear, disputed or undivided. none: no defined owner."
+        }
+      }
+    },
+
+    "accountability": {
+      "description": "Who is accountable for outcomes and can suspend the delegation. Ambiguous ownership is not representable.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["form", "role", "deputy", "accepted"],
+          "properties": {
+            "form": { "const": "single" },
+            "role": { "$ref": "#/$defs/roleRef" },
+            "deputy": { "$ref": "#/$defs/roleRef", "description": "Designated in advance; re-attests leases when the role is unavailable." },
+            "accepted": { "$ref": "#/$defs/approvalRef", "description": "The role holder's acceptance." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["form", "owners", "gapCheckRef", "arrangementRef", "stopRule"],
+          "properties": {
+            "form": { "const": "shared" },
+            "owners": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["role", "deputy", "answersFor", "accepted"],
+                "properties": {
+                  "role": { "$ref": "#/$defs/roleRef" },
+                  "deputy": {
+                    "$ref": "#/$defs/roleRef",
+                    "description": "Designated in advance by this owner. Re-attestation needs every co-owner, so each owner needs their own deputy or one absence blocks renewal."
+                  },
+                  "answersFor": { "type": "string", "minLength": 1 },
+                  "accepted": { "$ref": "#/$defs/approvalRef" }
+                }
+              }
+            },
+            "gapCheckRef": { "type": "string", "description": "Evidence that every consequence has an owner." },
+            "arrangementRef": { "type": "string" },
+            "stopRule": {
+              "const": "any-suspends-all-resume",
+              "description": "Fixed. Any co-owner may suspend; resuming needs all of them."
+            }
+          }
+        }
+      ]
+    },
+
+    "confidence": {
+      "type": "object",
+      "description": "How a composite confidence score maps to the three confidence levels. Thresholds belong to this row only and are not comparable across rows.",
+      "additionalProperties": false,
+      "required": ["scoringPolicy", "thresholds"],
+      "properties": {
+        "scoringPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version"],
+          "properties": {
+            "id": { "$ref": "#/$defs/identifier" },
+            "version": { "type": "string" }
+          }
+        },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["high", "medium"],
+          "description": "score >= high is high; score >= medium is medium; anything else, or no score, is low.",
+          "properties": {
+            "high": { "$ref": "#/$defs/probability" },
+            "medium": { "$ref": "#/$defs/probability" }
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "description": "Required whenever the row can reach Band A. The threshold is an output of this record, not an input.",
+          "additionalProperties": false,
+          "required": ["errorTarget", "confidenceLevel", "sampleSize", "sampleDate"],
+          "properties": {
+            "errorTarget": { "$ref": "#/$defs/probability", "description": "Tolerated error rate among auto-executed decisions." },
+            "confidenceLevel": { "$ref": "#/$defs/probability", "description": "Confidence with which the target was demonstrated." },
+            "sampleSize": { "type": "integer", "minimum": 1 },
+            "sampleDate": { "type": "string", "format": "date" },
+            "sampleRef": { "type": "string" },
+            "method": { "type": "string", "examples": ["learn-then-test"] }
+          }
+        },
+        "verificationRequired": {
+          "type": "boolean",
+          "default": false,
+          "description": "Band A additionally requires a passing independent verification signal."
+        }
+      }
+    },
+
+    "valueCeiling": {
+      "type": "object",
+      "description": "Per-action value limit and the calculation that produced it.",
+      "additionalProperties": false,
+      "required": ["limit", "fact", "onExceed"],
+      "properties": {
+        "limit": { "$ref": "#/$defs/money" },
+        "fact": { "$ref": "#/$defs/identifier", "description": "Fact carrying the action's value, e.g. 'amount'." },
+        "onExceed": { "$ref": "#/$defs/restrictiveBand" },
+        "derivation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["binding"],
+          "properties": {
+            "recoveryRate": { "$ref": "#/$defs/probability" },
+            "frictionCost": { "$ref": "#/$defs/money" },
+            "reviewCost": { "$ref": "#/$defs/money" },
+            "errorTarget": { "$ref": "#/$defs/probability" },
+            "riskAppetitePerEvent": { "$ref": "#/$defs/money" },
+            "binding": {
+              "enum": ["economic", "risk-appetite"],
+              "description": "Which tolerance set the limit."
+            },
+            "approvedBy": { "$ref": "#/$defs/approvalRef" }
+          }
+        }
+      }
+    },
+
+    "cumulativeCap": {
+      "type": "object",
+      "description": "A limit over a rolling window. Pending requests count toward it. A breach lowers the band, never blocks, never loosens.",
+      "additionalProperties": false,
+      "required": ["id", "window", "onBreach"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "window": { "$ref": "#/$defs/duration" },
+        "total": { "$ref": "#/$defs/money", "description": "Value cap over the window." },
+        "fact": { "$ref": "#/$defs/identifier", "description": "Fact summed for 'total'." },
+        "count": { "type": "integer", "minimum": 1, "description": "Rate cap: number of actions over the window." },
+        "groupBy": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Facts that partition the cap, e.g. ['counterparty']. Empty means one cap for the whole row."
+        },
+        "onBreach": { "$ref": "#/$defs/restrictiveBand" },
+        "onMissingHistory": {
+          "const": "treat-as-breached",
+          "default": "treat-as-breached",
+          "description": "Fixed. An unreadable event history is a breach."
+        }
+      },
+      "anyOf": [
+        { "required": ["total", "fact"] },
+        { "required": ["count"] }
+      ]
+    },
+
+    "restriction": {
+      "type": "object",
+      "description": "A condition that pushes the decision to a stricter band regardless of confidence, e.g. 'politically exposed person'.",
+      "additionalProperties": false,
+      "required": ["id", "when", "band"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "when": { "$ref": "#/$defs/condition" },
+        "band": { "$ref": "#/$defs/restrictiveBand" },
+        "reason": { "type": "string" }
+      }
+    },
+
+    "lease": {
+      "type": "object",
+      "description": "Authority for a continuous agent. Observation is standing but short; every action is a separate response context.",
+      "additionalProperties": false,
+      "required": ["observationCapabilities", "lifetime", "maxLifetime", "responseContextLifetime"],
+      "properties": {
+        "observationCapabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Read and alert only. Never execution."
+        },
+        "lifetime": { "$ref": "#/$defs/duration", "description": "Each automatic renewal lasts this long." },
+        "maxLifetime": { "$ref": "#/$defs/duration", "description": "After this, renewal needs human re-attestation." },
+        "responseContextLifetime": { "$ref": "#/$defs/duration" },
+        "reattestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "evidencePack": {
+              "type": "array",
+              "items": { "enum": ["interventions", "false-alerts", "missed-detections", "circuit-breaker-events", "boundary-verification", "scorecard"] }
+            },
+            "onLapse": {
+              "const": "observe-only",
+              "default": "observe-only",
+              "description": "Fixed. A missed re-attestation withdraws response authority; it never extends it."
+            }
+          }
+        }
+      }
+    },
+
+    "chain": {
+      "type": "object",
+      "description": "Limits on sub-agents spawned under this row. Children only ever receive a subset of the parent's authority.",
+      "additionalProperties": false,
+      "required": ["maxDepth", "maxFanOut"],
+      "properties": {
+        "maxDepth": { "type": "integer", "minimum": 0 },
+        "maxFanOut": { "type": "integer", "minimum": 0 },
+        "allowedSubagents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "capabilities"],
+            "properties": {
+              "type": { "$ref": "#/$defs/identifier" },
+              "capabilities": { "type": "array", "items": { "type": "string" } },
+              "maxLifetime": { "$ref": "#/$defs/duration" },
+              "maxCount": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "onOutsidePattern": {
+          "const": "C",
+          "default": "C",
+          "description": "Fixed. A spawn outside the allowed patterns escalates."
+        }
+      }
+    },
+
+    "rowOversight": {
+      "type": "object",
+      "description": "Inputs to the review-load calculation, and oversight-effectiveness settings.",
+      "additionalProperties": false,
+      "properties": {
+        "expectedPerWeek": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "A": { "type": "number", "minimum": 0 },
+            "B": { "type": "number", "minimum": 0 },
+            "C": { "type": "number", "minimum": 0 }
+          }
+        },
+        "reviewMinutes": { "type": "number", "minimum": 0 },
+        "escalationMinutes": { "type": "number", "minimum": 0 },
+        "auditSampleRate": { "$ref": "#/$defs/probability", "description": "Share of Band A decisions audited after execution. Required and above zero on any row that can reach Band A, including routing-only rows." },
+        "auditMinutes": { "type": "number", "minimum": 0 },
+        "minPlausibleReviewSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Reviews faster than this are flagged as possible rubber-stamping."
+        },
+        "recordsFeed": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["regulatory-reporting", "investigations", "identifiable-individuals"] },
+          "description": "Where this row's records end up. Any entry forbids seeding."
+        },
+        "seeding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "rate": { "$ref": "#/$defs/probability" },
+            "targetDetectionRate": { "$ref": "#/$defs/probability" }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "required": ["rate", "targetDetectionRate"] }
+        }
+      },
+      "if": {
+        "required": ["seeding"],
+        "properties": { "seeding": { "properties": { "enabled": { "const": true } } } }
+      },
+      "then": {
+        "required": ["recordsFeed"],
+        "properties": { "recordsFeed": { "maxItems": 0 } }
+      }
+    },
+
+    "workflowOversight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fundedReviewerHoursPerWeek"],
+      "properties": {
+        "fundedReviewerHoursPerWeek": { "type": "number", "minimum": 0 },
+        "fundedBy": { "$ref": "#/$defs/approvalRef", "description": "Budget holder's confirmation." },
+        "maxUtilization": { "$ref": "#/$defs/probability", "default": 0.8 },
+        "reviewerLevelMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "description": "Per-reviewer metrics are employee monitoring. Off by default; enabling needs a recorded approval such as a DPIA.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "approvalRef": { "type": "string" }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "required": ["approvalRef"] }
+        }
+      }
+    },
+
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "intendedMechanism", "description", "verification"],
+      "properties": {
+        "kind": { "enum": ["tool", "scope", "network-egress", "sandbox", "data-access"] },
+        "intendedMechanism": {
+          "enum": ["absent", "scope-denied", "policy"],
+          "description": "absent (strongest) > scope-denied > policy (weakest). Unverified boundaries are credited at policy strength whatever this says."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["probe", "every"],
+          "properties": {
+            "probe": { "type": "string", "description": "The forbidden action attempted from inside the agent's context." },
+            "target": { "type": "string", "description": "Canary or dry-run target. Never a live counterparty." },
+            "every": { "$ref": "#/$defs/duration" },
+            "alsoOn": {
+              "type": "array",
+              "items": { "enum": ["deploy", "agent-version", "tool-manifest", "credentials", "infrastructure"] }
+            }
+          }
+        }
+      }
+    },
+
+    "circuitBreaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "condition", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "condition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "scope-denial-rate",
+                "band-drift",
+                "chain-depth",
+                "spend-per-context",
+                "volume-per-context",
+                "non-delegable-touch",
+                "boundary-verification-failed"
+              ]
+            },
+            "threshold": { "type": "number" },
+            "window": { "$ref": "#/$defs/duration" },
+            "boundary": { "$ref": "#/$defs/boundaryRef" }
+          }
+        },
+        "action": {
+          "enum": ["suspend", "alert"],
+          "description": "Breakers only contain. There is no action that resumes or widens."
+        },
+        "notify": { "type": "array", "items": { "$ref": "#/$defs/roleRef" } }
+      }
+    },
+
+    "row": {
+      "type": "object",
+      "description": "One decision type, or (kind 'preparatory') the calls that serve one. Rows are cut where delegable authority differs.",
+      "additionalProperties": false,
+      "required": ["id", "title", "accountability", "capabilities", "authority"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "pattern": {
+          "enum": [
+            "prepare-and-present",
+            "draft-and-approve",
+            "triage-and-route",
+            "execute-and-audit",
+            "monitor-and-intervene",
+            "coordinate-and-escalate"
+          ]
+        },
+        "profile": { "$ref": "#/$defs/profile" },
+        "accountability": { "$ref": "#/$defs/accountability" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Abstract capability ids this decision type governs, e.g. 'erp:invoice.approve'. Binding host tools to capabilities is not the matrix's job."
+        },
+        "requiresFacts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Facts an evaluator must extract before it can place a request in a band. A missing fact means the call cannot be placed."
+        },
+        "authority": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "serves", "effect"],
+              "description": "Calls that decide nothing and serve a decision row: reading the invoice before approving it, assembling context for a human. They inherit the served row's authority boundary instead of being gated themselves, so there is no confidence, band, reviewer or calibration. They are permitted only while an execution context for a served row is live, stay subject to boundaries, rate caps, restrictions and circuit breakers, and are logged like any other call.",
+              "properties": {
+                "kind": { "const": "preparatory" },
+                "serves": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "$ref": "#/$defs/rowRef" },
+                  "description": "Decision rows (delegable or non-delegable) this row serves. Never another preparatory row. A non-delegable row can be served only if its agentMayPrepare is true."
+                },
+                "effect": {
+                  "enum": ["read", "draft"],
+                  "description": "read: no change anywhere. draft: writes only a proposal addressed to a human, never the system of record. This is a design claim; it is credited at policy strength unless a listed boundary backs it and its verification passes."
+                },
+                "rateCaps": {
+                  "type": "array",
+                  "description": "Count-only caps, e.g. reads per day. There is no band to lower, so a breach refuses the call.",
+                  "items": {
+                    "allOf": [
+                      { "$ref": "#/$defs/cumulativeCap" },
+                      {
+                        "required": ["count"],
+                        "not": { "required": ["total"] },
+                        "properties": { "onBreach": { "const": "non-delegable" } }
+                      }
+                    ]
+                  }
+                },
+                "restrictions": {
+                  "type": "array",
+                  "description": "Conditions under which the call is refused, e.g. records of a protected category.",
+                  "items": {
+                    "allOf": [
+                      { "$ref": "#/$defs/restriction" },
+                      { "properties": { "band": { "const": "non-delegable" } } }
+                    ]
+                  }
+                },
+                "boundaries": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/boundaryRef" },
+                  "description": "Boundaries that back the effect claim, e.g. a read-only credential whose write attempt is probed."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "reason"],
+              "properties": {
+                "kind": { "const": "non-delegable" },
+                "reason": { "type": "string", "minLength": 1 },
+                "agentMayPrepare": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Whether a preparatory row may serve this row, letting the agent assemble context for the human."
+                },
+                "boundaries": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "$ref": "#/$defs/boundaryRef" },
+                  "description": "Boundaries that keep the capability out of reach. Should be 'absent'."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "routing", "reviewer", "escalation"],
+              "properties": {
+                "kind": { "const": "delegable" },
+                "routing": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["high", "medium", "low"],
+                  "description": "Band at each confidence level. Must not get less restrictive as confidence falls (A < B < C); the schema rejects any routing that does.",
+                  "properties": {
+                    "high": { "$ref": "#/$defs/band" },
+                    "medium": { "$ref": "#/$defs/band" },
+                    "low": { "$ref": "#/$defs/band" }
+                  }
+                },
+                "confidence": { "$ref": "#/$defs/confidence" },
+                "reviewer": { "$ref": "#/$defs/roleRef", "description": "Approver for Band B." },
+                "escalation": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["role", "sla"],
+                  "properties": {
+                    "role": { "$ref": "#/$defs/roleRef", "description": "Approver for Band C." },
+                    "sla": { "$ref": "#/$defs/duration" },
+                    "testedRef": { "type": "string", "description": "Evidence that the path reaches the role within SLA." }
+                  }
+                },
+                "requiredApprovals": {
+                  "type": "array",
+                  "description": "Consent rights (works council, committee, four-eyes) that must exist as approval records before execution, in any band.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["role", "within"],
+                    "properties": {
+                      "role": { "$ref": "#/$defs/roleRef" },
+                      "within": { "$ref": "#/$defs/duration" }
+                    }
+                  }
+                },
+                "valueCeiling": { "$ref": "#/$defs/valueCeiling" },
+                "cumulativeCaps": { "type": "array", "items": { "$ref": "#/$defs/cumulativeCap" } },
+                "restrictions": { "type": "array", "items": { "$ref": "#/$defs/restriction" } },
+                "regulatedJustification": {
+                  "type": "object",
+                  "description": "Why a regulated decision may reach Band A: what stays with a human, why the delegated slice is narrower, and what bounds it.",
+                  "additionalProperties": false,
+                  "required": ["retainedByHuman", "whyNarrower", "bounds"],
+                  "properties": {
+                    "retainedByHuman": { "type": "string", "minLength": 1 },
+                    "whyNarrower": { "type": "string", "minLength": 1 },
+                    "bounds": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "executionContext": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["maxLifetime"],
+                  "properties": { "maxLifetime": { "$ref": "#/$defs/duration" } }
+                },
+                "lease": { "$ref": "#/$defs/lease" },
+                "chain": { "$ref": "#/$defs/chain" },
+                "boundaries": { "type": "array", "items": { "$ref": "#/$defs/boundaryRef" } }
+              },
+              "allOf": [
+                {
+                  "$comment": "Band A needs calibrated confidence.",
+                  "if": { "$ref": "#/$defs/reachesBandA" },
+                  "then": { "required": ["confidence"], "properties": { "confidence": { "required": ["calibration"] } } }
+                },
+                {
+                  "$comment": "Monotone routing: medium is at least as restrictive as high, low at least as restrictive as medium. Lower confidence never loosens.",
+                  "properties": {
+                    "routing": {
+                      "not": {
+                        "anyOf": [
+                          { "properties": { "high": { "const": "B" }, "medium": { "const": "A" } } },
+                          { "properties": { "high": { "const": "C" }, "medium": { "enum": ["A", "B"] } } },
+                          { "properties": { "medium": { "const": "B" }, "low": { "const": "A" } } },
+                          { "properties": { "medium": { "const": "C" }, "low": { "enum": ["A", "B"] } } }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "oversight": { "$ref": "#/$defs/rowOversight" },
+        "circuitBreakers": { "type": "array", "items": { "$ref": "#/$defs/circuitBreaker" } }
+      },
+      "allOf": [
+        {
+          "$comment": "Decision rows carry a pattern and a profile. Preparatory rows inherit both from the rows they serve and must not state their own.",
+          "if": { "properties": { "authority": { "properties": { "kind": { "const": "preparatory" } } } } },
+          "then": { "not": { "anyOf": [ { "required": ["pattern"] }, { "required": ["profile"] } ] } },
+          "else": { "required": ["pattern", "profile"] }
+        },
+        {
+          "$comment": "No Band A where regulation requires human involvement, or where confidence cannot be measured.",
+          "if": {
+            "required": ["profile"],
+            "properties": {
+              "profile": {
+                "anyOf": [
+                  { "properties": { "regulatoryExposure": { "const": "prohibited-from-full-automation" } }, "required": ["regulatoryExposure"] },
+                  { "properties": { "confidenceMeasurability": { "const": "judgment-dependent" } }, "required": ["confidenceMeasurability"] }
+                ]
+              }
+            }
+          },
+          "then": { "properties": { "authority": { "not": { "$ref": "#/$defs/reachesBandA" } } } }
+        },
+        {
+          "$comment": "A regulated decision reaches Band A only with a written justification.",
+          "if": {
+            "required": ["profile"],
+            "properties": {
+              "profile": { "properties": { "regulatoryExposure": { "const": "regulated-decision" } }, "required": ["regulatoryExposure"] },
+              "authority": { "$ref": "#/$defs/reachesBandA" }
+            }
+          },
+          "then": { "properties": { "authority": { "required": ["regulatedJustification"] } } }
+        },
+        {
+          "$comment": "Ambiguous or missing ownership cannot be delegated. Every profile rule requires 'profile' in its 'if': an absent property passes 'properties' vacuously, which would fire the rule on rows without a profile.",
+          "if": {
+            "required": ["profile"],
+            "properties": {
+              "profile": { "properties": { "accountabilityClarity": { "enum": ["ambiguous", "none"] } }, "required": ["accountabilityClarity"] }
+            }
+          },
+          "then": { "properties": { "authority": { "properties": { "kind": { "const": "non-delegable" } } } } }
+        },
+        {
+          "$comment": "A delegable row declares the inputs to the review-load calculation, so funding can be checked rather than assumed.",
+          "if": { "properties": { "authority": { "properties": { "kind": { "const": "delegable" } } } } },
+          "then": {
+            "required": ["oversight"],
+            "properties": { "oversight": { "required": ["expectedPerWeek", "reviewMinutes", "escalationMinutes"] } }
+          }
+        },
+        {
+          "$comment": "Any row that can reach Band A audits a non-zero sample after execution, whatever its pattern. A routing-only row (triage-and-route) still executes a decision, the route, against its own error target; without an outcome sample that target cannot be checked. Downstream re-routes are extra evidence, not a substitute: they only catch the misroutes someone notices. How the sample is audited may differ by pattern; whether it exists may not.",
+          "if": { "properties": { "authority": { "$ref": "#/$defs/reachesBandA" } } },
+          "then": {
+            "required": ["oversight"],
+            "properties": {
+              "oversight": {
+                "required": ["auditSampleRate", "auditMinutes"],
+                "properties": { "auditSampleRate": { "exclusiveMinimum": 0 } }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "reachesBandA": {
+      "$comment": "Matches an authority object whose routing puts any confidence level in Band A.",
+      "type": "object",
+      "required": ["routing"],
+      "properties": {
+        "routing": {
+          "anyOf": [
+            { "properties": { "high": { "const": "A" } }, "required": ["high"] },
+            { "properties": { "medium": { "const": "A" } }, "required": ["medium"] },
+            { "properties": { "low": { "const": "A" } }, "required": ["low"] }
+          ]
+        }
+      }
+    }
+  }
+}

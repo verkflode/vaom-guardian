@@ -1,0 +1,65 @@
+{
+  "$schema": "../vaom-binding.schema.json",
+  "format": "vaom.binding/0.1",
+  "id": "example.ap.invoice.claude-code",
+  "version": "0.2.0",
+  "title": "Invoice matrix on Claude Code, via a placeholder ERP MCP server",
+  "host": { "id": "claude-code", "toolSet": "claude-code-2026.09 + placeholder erp MCP server 1.x" },
+  "matrix": { "id": "example.ap.invoice", "versions": ">=1.0.0 <2.0.0" },
+
+  "facts": {
+    "amount": { "type": "money", "description": "Invoice amount as it will be approved." },
+    "counterparty": { "type": "string", "description": "Vendor id.", "record": "digest" },
+    "task": { "type": "string", "description": "Invoice id: the task the execution context is bound to." }
+  },
+
+  "tools": [
+    {
+      "id": "approve-one",
+      "match": { "tool": "mcp__erp__approve_invoice" },
+      "capability": "erp:invoice.approve",
+      "facts": {
+        "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
+        "counterparty": { "arg": "/vendor_id" },
+        "task": { "arg": "/invoice_id" }
+      }
+    },
+    {
+      "id": "approve-batch",
+      "description": "Each invoice in the batch is its own action, so three 2,000 EUR invoices can't pass as one call under a 5,000 EUR ceiling.",
+      "match": { "tool": "mcp__erp__approve_invoices" },
+      "capability": "erp:invoice.approve",
+      "items": {
+        "arg": "/invoices",
+        "maxItems": 50,
+        "facts": {
+          "amount": { "amount": { "arg": "/amount" }, "currency": { "const": "EUR" } },
+          "counterparty": { "arg": "/vendor_id" },
+          "task": { "arg": "/invoice_id" }
+        }
+      }
+    },
+    {
+      "id": "read-invoice",
+      "match": { "tool": "mcp__erp__get_invoice" },
+      "capability": "erp:invoice.read",
+      "facts": { "task": { "arg": "/invoice_id" } }
+    },
+    {
+      "id": "read-vendor",
+      "match": { "tool": "mcp__erp__get_vendor" },
+      "capability": "erp:vendor.read"
+    },
+    {
+      "id": "read-contract",
+      "match": { "tool": "mcp__erp__get_contract" },
+      "capability": "erp:contract.read"
+    },
+    {
+      "id": "flag-duplicate",
+      "match": { "tool": "mcp__erp__flag_invoice", "when": { "arg": "/reason", "op": "eq", "value": "duplicate" } },
+      "capability": "erp:invoice.flag",
+      "facts": { "task": { "arg": "/invoice_id" } }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# Private working files: never committed (see CLAUDE.md).
+CLAUDE.md
+BRIEF.md
+schema/NOTES.md
+refs/
+
+node_modules/
+.DS_Store

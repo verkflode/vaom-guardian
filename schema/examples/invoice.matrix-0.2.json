@@ -1,0 +1,379 @@
+{
+  "$schema": "../vaom-matrix-0.2.schema.json",
+  "format": "vaom.matrix/0.2",
+  "id": "example.ap.invoice",
+  "version": "1.1.0",
+  "title": "Vendor invoice approval",
+  "description": "The vendor invoice matrix, with illustrative figures.",
+  "effective": {
+    "from": "2026-10-01T00:00:00Z"
+  },
+  "approval": {
+    "role": "ap-owner",
+    "date": "2026-09-29",
+    "ref": "placeholder://approvals/ap-matrix-1.1.0"
+  },
+  "roles": {
+    "ap-owner": {
+      "title": "Accounts payable owner"
+    },
+    "ap-deputy": {
+      "title": "Accounts payable deputy"
+    },
+    "ap-clerk": {
+      "title": "Accounts payable clerk"
+    },
+    "finance-controller": {
+      "title": "Financial controller"
+    },
+    "legal-counsel": {
+      "title": "Legal counsel"
+    }
+  },
+  "boundaries": {
+    "no-contract-write": {
+      "kind": "tool",
+      "intendedMechanism": "absent",
+      "description": "No contract-write capability in the agent's tool manifest, and no such scope on its credentials.",
+      "verification": {
+        "probe": "Attempt a contract amendment from inside the agent context.",
+        "target": "placeholder://canary/contracts",
+        "every": "P7D",
+        "alsoOn": [
+          "deploy",
+          "agent-version",
+          "tool-manifest",
+          "credentials"
+        ]
+      }
+    },
+    "erp-read-only-credential": {
+      "kind": "scope",
+      "intendedMechanism": "scope-denied",
+      "description": "The credential used for preparatory ERP calls carries read scopes only.",
+      "verification": {
+        "probe": "Attempt an invoice update and a contract update with the preparatory credential.",
+        "target": "placeholder://canary/erp",
+        "every": "P7D",
+        "alsoOn": [
+          "deploy",
+          "credentials"
+        ]
+      }
+    }
+  },
+  "oversight": {
+    "fundedReviewerHoursPerWeek": 60,
+    "fundedBy": {
+      "role": "finance-controller",
+      "date": "2026-09-29"
+    },
+    "maxUtilization": 0.8,
+    "reviewerLevelMetrics": {
+      "enabled": false
+    }
+  },
+  "circuitBreakers": [
+    {
+      "id": "non-delegable-touch",
+      "condition": {
+        "kind": "non-delegable-touch"
+      },
+      "action": "suspend",
+      "notify": [
+        "ap-owner"
+      ]
+    },
+    {
+      "id": "contract-boundary-failed",
+      "condition": {
+        "kind": "boundary-verification-failed",
+        "boundary": "no-contract-write"
+      },
+      "action": "suspend",
+      "notify": [
+        "ap-owner",
+        "legal-counsel"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "invoice.approve",
+      "title": "Approve invoice",
+      "description": "Standard invoices up to the ceiling auto-approve at high confidence. Above the ceiling the same row lands in Band B at best, which reproduces the separate 'Invoice > 5k' line of the whitepaper table. Approved invoices post to the ledger, which feeds VAT returns and statutory accounts, so the decision type feeds regulatory reporting and seeding is off. Oversight effectiveness is evidenced by modification rate and review time.",
+      "pattern": "execute-and-audit",
+      "profile": {
+        "reversibility": "reversible-with-friction",
+        "consequenceScope": "internal-financial",
+        "regulatoryExposure": "general-context",
+        "confidenceMeasurability": "quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "ap-owner",
+        "deputy": "ap-deputy",
+        "accepted": {
+          "role": "ap-owner",
+          "date": "2026-09-29"
+        }
+      },
+      "capabilities": [
+        "erp:invoice.approve"
+      ],
+      "requiresFacts": [
+        "amount",
+        "counterparty"
+      ],
+      "authority": {
+        "kind": "delegable",
+        "routing": {
+          "high": "A",
+          "medium": "B",
+          "low": "C"
+        },
+        "confidence": {
+          "scoringPolicy": {
+            "id": "invoice-standard",
+            "version": "3.2"
+          },
+          "thresholds": {
+            "high": 0.92,
+            "medium": 0.7
+          },
+          "calibration": {
+            "errorTarget": 0.02,
+            "confidenceLevel": 0.95,
+            "sampleSize": 200,
+            "sampleDate": "2026-09-15",
+            "method": "learn-then-test"
+          },
+          "verificationRequired": true
+        },
+        "reviewer": "ap-clerk",
+        "escalation": {
+          "role": "finance-controller",
+          "sla": "PT8H"
+        },
+        "valueCeiling": {
+          "limit": {
+            "amount": "5000",
+            "currency": "EUR"
+          },
+          "fact": "amount",
+          "onExceed": "B",
+          "derivation": {
+            "recoveryRate": 0.97,
+            "frictionCost": {
+              "amount": "60",
+              "currency": "EUR"
+            },
+            "reviewCost": {
+              "amount": "9",
+              "currency": "EUR"
+            },
+            "errorTarget": 0.02,
+            "riskAppetitePerEvent": {
+              "amount": "210",
+              "currency": "EUR"
+            },
+            "binding": "risk-appetite",
+            "approvedBy": {
+              "role": "ap-owner",
+              "date": "2026-09-29"
+            }
+          }
+        },
+        "cumulativeCaps": [
+          {
+            "id": "per-vendor-daily",
+            "window": "P1D",
+            "total": {
+              "amount": "5000",
+              "currency": "EUR"
+            },
+            "fact": "amount",
+            "groupBy": [
+              "counterparty"
+            ],
+            "onBreach": "B"
+          }
+        ],
+        "executionContext": {
+          "maxLifetime": "PT15M"
+        }
+      },
+      "oversight": {
+        "expectedPerWeek": {
+          "A": 1200,
+          "B": 300,
+          "C": 20
+        },
+        "reviewMinutes": 6,
+        "escalationMinutes": 20,
+        "auditSampleRate": 0.05,
+        "auditMinutes": 4,
+        "minPlausibleReviewSeconds": 45,
+        "recordsFeed": [
+          "regulatory-reporting"
+        ],
+        "seeding": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "id": "invoice.duplicate-anomaly",
+      "title": "Duplicate detection anomaly",
+      "pattern": "triage-and-route",
+      "profile": {
+        "reversibility": "fully-reversible",
+        "consequenceScope": "internal-financial",
+        "regulatoryExposure": "general-context",
+        "confidenceMeasurability": "partially-quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "ap-owner",
+        "deputy": "ap-deputy",
+        "accepted": {
+          "role": "ap-owner",
+          "date": "2026-09-29"
+        }
+      },
+      "capabilities": [
+        "erp:invoice.flag"
+      ],
+      "authority": {
+        "kind": "delegable",
+        "routing": {
+          "high": "B",
+          "medium": "C",
+          "low": "C"
+        },
+        "confidence": {
+          "scoringPolicy": {
+            "id": "invoice-duplicate",
+            "version": "1.0"
+          },
+          "thresholds": {
+            "high": 0.9,
+            "medium": 0.75
+          }
+        },
+        "reviewer": "ap-clerk",
+        "escalation": {
+          "role": "finance-controller",
+          "sla": "PT4H"
+        }
+      },
+      "oversight": {
+        "expectedPerWeek": {
+          "B": 15,
+          "C": 5
+        },
+        "reviewMinutes": 10,
+        "escalationMinutes": 30,
+        "minPlausibleReviewSeconds": 60
+      }
+    },
+    {
+      "id": "contract.modify",
+      "title": "Contractual modification",
+      "pattern": "prepare-and-present",
+      "profile": {
+        "reversibility": "irreversible",
+        "consequenceScope": "external-relational",
+        "regulatoryExposure": "general-context",
+        "confidenceMeasurability": "judgment-dependent",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "legal-counsel",
+        "deputy": "finance-controller",
+        "accepted": {
+          "role": "legal-counsel",
+          "date": "2026-09-29"
+        }
+      },
+      "capabilities": [
+        "erp:contract.write"
+      ],
+      "authority": {
+        "kind": "non-delegable",
+        "reason": "Consequences are not captured by an amount; non-delegable at any value.",
+        "agentMayPrepare": true,
+        "boundaries": [
+          "no-contract-write"
+        ]
+      }
+    },
+    {
+      "id": "invoice.prepare",
+      "title": "Read invoices and vendors",
+      "description": "Everything the agent reads before approving or flagging an invoice: the invoice, the PO match, vendor history.",
+      "accountability": {
+        "form": "single",
+        "role": "ap-owner",
+        "deputy": "ap-deputy",
+        "accepted": {
+          "role": "ap-owner",
+          "date": "2026-09-29"
+        }
+      },
+      "capabilities": [
+        "erp:invoice.read",
+        "erp:vendor.read"
+      ],
+      "authority": {
+        "kind": "preparatory",
+        "serves": [
+          "invoice.approve",
+          "invoice.duplicate-anomaly"
+        ],
+        "effect": "read",
+        "rateCaps": [
+          {
+            "id": "reads-per-day",
+            "window": "P1D",
+            "count": 2000,
+            "onBreach": "non-delegable"
+          }
+        ],
+        "boundaries": [
+          "erp-read-only-credential"
+        ]
+      }
+    },
+    {
+      "id": "contract.prepare",
+      "title": "Assemble contract context",
+      "description": "Reading contract terms so a human can decide a modification. The agent never writes the contract.",
+      "accountability": {
+        "form": "single",
+        "role": "legal-counsel",
+        "deputy": "finance-controller",
+        "accepted": {
+          "role": "legal-counsel",
+          "date": "2026-09-29"
+        }
+      },
+      "capabilities": [
+        "erp:contract.read"
+      ],
+      "authority": {
+        "kind": "preparatory",
+        "serves": [
+          "contract.modify"
+        ],
+        "effect": "read",
+        "boundaries": [
+          "erp-read-only-credential"
+        ]
+      }
+    }
+  ]
+}

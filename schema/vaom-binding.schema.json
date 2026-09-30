@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:binding:0.1",
+  "title": "VAOM capability binding",
+  "description": "Maps one agent host's tool calls onto the abstract capabilities of a Delegation Authority Matrix, and says where each fact a row needs is read from. The matrix says what is allowed; the binding says how to recognise it on a given host. It never grants anything itself: a call that no entry matches, whose capability no matrix row governs, or whose required facts cannot be read cannot be placed in a band, and an evaluator treats that as a decision failure (never allow). Passing this schema is necessary but not sufficient: the binding linter checks it against the matrix it names. Draft 0.1, a sketch.",
+  "type": "object",
+  "required": ["format", "id", "version", "host", "matrix", "facts", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "format": { "const": "vaom.binding/0.1" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+      "description": "Semantic version. Decision records cite (id, version) alongside the matrix version, so a decision can be replayed exactly."
+    },
+    "title": { "type": "string" },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "toolSet"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier", "examples": ["claude-code"] },
+        "toolSet": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The host tool set this binding was written against, e.g. a dated host release. Reviewed whenever the host adds or changes tools; a new host tool is unmatched until then."
+        }
+      }
+    },
+    "matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "versions"],
+      "description": "The matrix this binding is for. The linter checks it against the loaded matrix, not just the range.",
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "versions": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Semver range, e.g. '>=1.0.0 <2.0.0'. Recalibration bumps the matrix minor version, so an exact pin would force a binding release for every threshold change.",
+          "examples": [">=1.0.0 <2.0.0"]
+        }
+      }
+    },
+    "facts": {
+      "type": "object",
+      "description": "Every fact the binding can produce, keyed by fact id, with its type. The names must match the matrix's requiresFacts, conditions, caps and ceilings.",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/factDef" }
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/toolEntry" }
+    }
+  },
+
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "pointer": {
+      "type": "string",
+      "pattern": "^(/([^~/]|~[01])*)*$",
+      "description": "JSON Pointer (RFC 6901) into the tool call's arguments. No wildcards: one pointer reads one value."
+    },
+
+    "factDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["string", "integer", "number", "boolean", "money", "timestamp"],
+          "description": "A value of the wrong type is treated as missing. 'money' is a decimal amount plus an ISO 4217 currency; amounts are never added across currencies."
+        },
+        "description": { "type": "string" },
+        "record": {
+          "enum": ["value", "digest", "omit"],
+          "default": "value",
+          "description": "How the fact appears in decision records. 'digest' stores a salted hash, e.g. for a counterparty or a person: caps can still group by it, and the record doesn't reveal it."
+        }
+      }
+    },
+
+    "extractor": {
+      "description": "Where one fact's value comes from. Only the request itself or a constant written by the binding author: nothing is looked up, so the evaluator stays pure. A fact read from the arguments is only sound because those same arguments are what executes.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arg"],
+          "properties": { "arg": { "$ref": "#/$defs/pointer" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["const"],
+          "properties": { "const": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["amount", "currency"],
+          "description": "For facts of type 'money'.",
+          "properties": {
+            "amount": { "$ref": "#/$defs/extractor" },
+            "currency": { "$ref": "#/$defs/extractor" }
+          }
+        }
+      ]
+    },
+
+    "argCondition": {
+      "description": "A predicate over the call's arguments, used to split one host tool into several capabilities. String matching on free text (a shell command, a URL) is easy to evade, so a capability recognised that way is recognised at policy strength at best; prefer tools with structured arguments.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all"],
+          "properties": { "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/argCondition" } } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": { "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/argCondition" } } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arg", "op", "value"],
+          "properties": {
+            "arg": { "$ref": "#/$defs/pointer" },
+            "op": { "enum": ["eq", "ne", "in", "prefix", "contains"] },
+            "value": {}
+          }
+        }
+      ]
+    },
+
+    "toolEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "match", "capability"],
+      "description": "Recognises some calls of one host tool as one capability. A call may match several entries: it then takes every matched capability, and its band is the strictest across them. So an extra entry can only narrow what a call may do. A call that matches no entry is unmapped.",
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "description": { "type": "string" },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tool": { "type": "string", "minLength": 1, "description": "Exact host tool name." },
+            "toolPrefix": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Tool-name prefix, for tool families such as one MCP server's tools."
+            },
+            "when": { "$ref": "#/$defs/argCondition" }
+          },
+          "oneOf": [
+            { "required": ["tool"], "not": { "required": ["toolPrefix"] } },
+            { "required": ["toolPrefix"], "not": { "required": ["tool"] } }
+          ]
+        },
+        "capability": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A capability id from the matrix. Exactly one matrix row must govern it."
+        },
+        "facts": {
+          "type": "object",
+          "description": "Facts read once per call.",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": { "$ref": "#/$defs/extractor" }
+        },
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arg", "facts"],
+          "description": "For batch tools. Each element of the array at 'arg' is evaluated as its own action, with its own facts plus the per-call ones. The call's band is the strictest across its items, and every item counts toward cumulative caps, so batching can't slip under a per-action ceiling. An empty or missing array means the call can't be placed.",
+          "properties": {
+            "arg": { "$ref": "#/$defs/pointer" },
+            "facts": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/identifier" },
+              "additionalProperties": { "$ref": "#/$defs/extractor", "description": "Pointers here are relative to the item." }
+            },
+            "maxItems": { "type": "integer", "minimum": 1, "description": "Larger batches can't be placed." }
+          }
+        }
+      }
+    }
+  }
+}
