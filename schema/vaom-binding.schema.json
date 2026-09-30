@@ -66,7 +66,7 @@
     "pointer": {
       "type": "string",
       "pattern": "^(/([^~/]|~[01])*)*$",
-      "description": "JSON Pointer (RFC 6901) into the tool call's arguments. No wildcards: one pointer reads one value."
+      "description": "JSON Pointer (RFC 6901) into the tool call's arguments. No wildcards: one pointer reads one value. Pointers address plain argument values: a wire adapter that carries each argument wrapped (ACS sends {value, provenance}) unwraps them first, so bindings stay independent of the wire format."
     },
 
     "factDef": {
@@ -171,7 +171,7 @@
         "capability": {
           "type": "string",
           "minLength": 1,
-          "description": "A capability id from the matrix. Exactly one matrix row must govern it."
+          "description": "A capability id from the matrix. Exactly one matrix row must govern it. The binding alone decides a call's capability: a capability the host or framework declares on the wire is never trusted for authority, and one that disagrees with the binding makes the call unplaceable."
         },
         "facts": {
           "type": "object",
