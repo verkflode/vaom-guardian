@@ -40,6 +40,7 @@ function lintPair(binding, matrix) {
     const rows = matrix.rows.filter((r) => r.capabilities.includes(t.capability));
     if (rows.length !== 1) { errs.push(`${t.id}: capability ${t.capability} governed by ${rows.length} rows`); continue; }
     const row = rows[0];
+    for (const f of Object.keys(t.items?.facts ?? {})) if (f in (t.facts ?? {})) errs.push(`${t.id}: fact ${f} extracted both per call and per item (no precedence rule)`);
     const extracted = { ...(t.facts ?? {}), ...(t.items?.facts ?? {}) };
     for (const [f, ex] of Object.entries(extracted)) {
       const def = binding.facts[f];
@@ -107,6 +108,7 @@ const lintCases = {
   "lint-ceiling-fact-not-money": (b) => { b.facts.amount.type = "number"; b.tools[0].facts.amount = { arg: "/amount" }; b.tools[1].items.facts.amount = { arg: "/amount" }; },
   "lint-tool-for-absent-boundary": (b) => { b.tools.push({ id: "amend-contract", match: { tool: "mcp__erp__amend_contract" }, capability: "erp:contract.write" }); },
   "lint-duplicate-entry-id": (b) => { entry(b, "flag-duplicate").id = "approve-one"; },
+  "lint-batch-fact-collision": (b) => { entry(b, "approve-batch").facts = { counterparty: { arg: "/default_vendor" } }; },
   "POS-extra-narrowing-entry": (b) => { b.tools.push({ id: "flag-any", match: { toolPrefix: "mcp__erp__flag" }, capability: "erp:invoice.flag", facts: { task: { arg: "/invoice_id" } } }); },
 };
 for (const [name, mutate] of Object.entries(lintCases)) {

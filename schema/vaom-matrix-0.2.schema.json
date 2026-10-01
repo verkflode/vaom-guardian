@@ -610,7 +610,7 @@
               "type": "object",
               "additionalProperties": false,
               "required": ["kind", "serves", "effect"],
-              "description": "Calls that decide nothing and serve a decision row: reading the invoice before approving it, assembling context for a human. They inherit the served row's authority boundary instead of being gated themselves, so there is no confidence, band, reviewer or calibration. They are permitted only while an execution context for a served row is live, stay subject to boundaries, rate caps, restrictions and circuit breakers, and are logged like any other call.",
+              "description": "Calls that decide nothing and serve a decision row: reading the invoice before approving it, assembling context for a human. They inherit the served row's authority boundary instead of being gated themselves, so there is no confidence, band, reviewer or calibration. They are permitted only while an execution context for a served row is open in the session. A context opens at activation (in ACS terms, sessionStart or agentTrigger carrying the task binding) and closes at the served row's executionContext.maxLifetime or at session end; no open context means the call cannot be placed. They stay subject to boundaries, rate caps, restrictions and circuit breakers, and are logged like any other call.",
               "properties": {
                 "kind": { "const": "preparatory" },
                 "serves": {
@@ -685,7 +685,7 @@
                   "type": "object",
                   "additionalProperties": false,
                   "required": ["high", "medium", "low"],
-                  "description": "Band at each confidence level. Must not get less restrictive as confidence falls (A < B < C); the schema rejects any routing that does.",
+                  "description": "Band at each confidence level. Must not get less restrictive as confidence falls (A < B < C); the schema rejects any routing that does. A row without a confidence policy has no score, so every call routes at low.",
                   "properties": {
                     "high": { "$ref": "#/$defs/band" },
                     "medium": { "$ref": "#/$defs/band" },
@@ -713,11 +713,24 @@
                     "required": ["role", "within"],
                     "properties": {
                       "role": { "$ref": "#/$defs/roleRef" },
-                      "within": { "$ref": "#/$defs/duration" }
+                      "within": {
+                        "$ref": "#/$defs/duration",
+                        "description": "The approval record must be dated no earlier than this long before execution. An older record, or none, means no approval: the call cannot execute."
+                      }
                     }
                   }
                 },
                 "valueCeiling": { "$ref": "#/$defs/valueCeiling" },
+                "noValueCeiling": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["reason", "approvedBy"],
+                  "description": "An explicit, approved decision that this row has no per-action value limit, e.g. a routing decision that carries no amount. Silence is not allowed where a ceiling is expected (see the row rules).",
+                  "properties": {
+                    "reason": { "type": "string", "minLength": 1 },
+                    "approvedBy": { "$ref": "#/$defs/approvalRef" }
+                  }
+                },
                 "cumulativeCaps": { "type": "array", "items": { "$ref": "#/$defs/cumulativeCap" } },
                 "restrictions": { "type": "array", "items": { "$ref": "#/$defs/restriction" } },
                 "regulatedJustification": {
@@ -742,6 +755,10 @@
                 "boundaries": { "type": "array", "items": { "$ref": "#/$defs/boundaryRef" } }
               },
               "allOf": [
+                {
+                  "$comment": "A ceiling and an explicit no-ceiling decision contradict each other.",
+                  "not": { "required": ["valueCeiling", "noValueCeiling"] }
+                },
                 {
                   "$comment": "Band A needs calibrated confidence.",
                   "if": { "$ref": "#/$defs/reachesBandA" },
@@ -801,6 +818,21 @@
             }
           },
           "then": { "properties": { "authority": { "required": ["regulatedJustification"] } } }
+        },
+        {
+          "$comment": "A row that can auto-execute with financial or external consequences states its value limit, or records an approved decision to have none. Silence would mean unbounded.",
+          "if": {
+            "required": ["profile"],
+            "properties": {
+              "profile": { "properties": { "consequenceScope": { "enum": ["internal-financial", "external-relational", "external-regulatory"] } }, "required": ["consequenceScope"] },
+              "authority": { "$ref": "#/$defs/reachesBandA" }
+            }
+          },
+          "then": {
+            "properties": {
+              "authority": { "anyOf": [ { "required": ["valueCeiling"] }, { "required": ["noValueCeiling"] } ] }
+            }
+          }
         },
         {
           "$comment": "Ambiguous or missing ownership cannot be delegated. Every profile rule requires 'profile' in its 'if': an absent property passes 'properties' vacuously, which would fire the rule on rows without a profile.",

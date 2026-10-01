@@ -1,5 +1,5 @@
-// Schema tests for vaom.matrix. The shared cases run against both 0.1 (frozen) and 0.2 (draft), so 0.2
-// provably keeps every 0.1 invariant. Each case mutates the version's invoice example once.
+// Schema tests for vaom.matrix. The shared cases run against both 0.1 (frozen) and 0.2 (draft), so the
+// invariants they check are checked on both versions. Each case mutates the version's invoice example once.
 // Names starting "POS-" must validate; every other case must be rejected.
 // Plus an exhaustive routing check against an oracle written independently of the schema's pair rules,
 // 0.2-only cases for preparatory rows, and a prototype of the matrix linter's preparatory rules.
@@ -24,10 +24,12 @@ const shared = m => { m.rows[0].accountability = { form: "shared", owners: [
   { role: "ap-owner", deputy: "ap-deputy", answersFor: "x", accepted: { role: "ap-owner", date: "2026-09-29" } },
   { role: "finance-controller", deputy: "ap-deputy", answersFor: "y", accepted: { role: "finance-controller", date: "2026-09-29" } } ],
   gapCheckRef: "g", arrangementRef: "a", stopRule: "any-suspends-all-resume" }; };
-// Triage row at Band A, modelled on the complaint-classification row (fully reversible, 2% misrouting target).
+// Triage row at Band A, modelled on the complaint-classification row (fully reversible, internally
+// scoped, 2% misrouting target). A route carries no amount, so it needs no value ceiling.
 const triageA = m => {
   const r = m.rows[1];
   r.profile.confidenceMeasurability = "quantifiable";
+  r.profile.consequenceScope = "internal-operational";
   r.authority.routing = { high: "A", medium: "B", low: "C" };
   r.authority.confidence.calibration = { errorTarget: 0.02, confidenceLevel: 0.95, sampleSize: 1000, sampleDate: "2026-09-01" };
   r.oversight.auditSampleRate = 0.02; r.oversight.auditMinutes = 3;
@@ -106,7 +108,7 @@ for (const [v, { validate, example }] of Object.entries(versions)) {
   }, 0);
   const allowed = ex.oversight.fundedReviewerHoursPerWeek * (ex.oversight.maxUtilization ?? 0.8);
   if (load > allowed) { wrong++; console.log(`WRONG ${v} example review load ${load.toFixed(2)} h/week exceeds ${allowed.toFixed(2)} allowed`); }
-  summary.push(`${v}: ${Object.keys(cases).length + 1} cases + 27 routings (${accepted} monotone), load ${load.toFixed(2)}/${allowed.toFixed(2)} h`);
+  summary.push(`${v}: example + ${Object.keys(cases).length} mutations + 27 routings (${accepted} monotone), load ${load.toFixed(2)}/${allowed.toFixed(2)} h`);
 }
 
 // Each version rejects the other's example: the format identifier is a hard gate.
@@ -133,8 +135,17 @@ const prepCases = {
   "POS-prep-draft": m => { m.rows[4].authority.effect = "draft"; },
   "POS-prep-with-breaker": m => { prep(m).circuitBreakers = [{ id: "read-burst", condition: { kind: "volume-per-context", threshold: 200, window: "PT1H" }, action: "suspend" }]; },
   "POS-only-prep-and-nondelegable-no-oversight": m => { m.rows = [m.rows[2], m.rows[4]]; delete m.oversight; },
+  // Value ceilings: silence must not mean unbounded on financial or external Band A rows (0.2 only).
+  "ceiling-financial-a-silent": m => { delete m.rows[0].authority.valueCeiling; },
+  "POS-ceiling-financial-a-explicit-none": m => { delete m.rows[0].authority.valueCeiling; m.rows[0].authority.noValueCeiling = { reason: "x", approvedBy: { role: "ap-owner", date: "2026-10-01" } }; },
+  "ceiling-none-without-approval": m => { delete m.rows[0].authority.valueCeiling; m.rows[0].authority.noValueCeiling = { reason: "x" }; },
+  "ceiling-both-ceiling-and-none": m => { m.rows[0].authority.noValueCeiling = { reason: "x", approvedBy: { role: "ap-owner", date: "2026-10-01" } }; },
+  "POS-ceiling-operational-a-silent": m => { m.rows[0].profile.consequenceScope = "internal-operational"; delete m.rows[0].authority.valueCeiling; },
+  "ceiling-external-a-silent": m => { m.rows[0].profile.consequenceScope = "external-relational"; delete m.rows[0].authority.valueCeiling; },
 };
 for (const [name, mutate] of Object.entries(prepCases)) { const m = base2(); mutate(m); run(`0.2 ${name}`, versions["0.2"].validate, m, name.startsWith("POS-")); }
+// Known gap, kept visible: frozen 0.1 still accepts a financial Band A row with no ceiling. 0.2 closes it.
+{ const m = JSON.parse(versions["0.1"].example); delete m.rows[0].authority.valueCeiling; run("0.1 frozen gap: silent ceiling still validates", versions["0.1"].validate, m, true); }
 
 // Prototype matrix linter, preparatory rules only (plus capability uniqueness and boundary refs, which
 // they depend on). Returns errors; empty means accepted.
@@ -175,6 +186,6 @@ for (const [name, mutate] of Object.entries(lintCases)) {
 }
 
 console.log(summary.join("\n"));
-console.log(`0.2 preparatory: ${Object.keys(prepCases).length} schema cases, ${Object.keys(lintCases).length} lint cases; cross-version: 2`);
+console.log(`0.2 only: ${Object.keys(prepCases).length} schema cases (preparatory rows, value ceilings), ${Object.keys(lintCases).length} lint cases; cross-version: 2; frozen-gap record: 1`);
 console.log(`${wrong} wrong`);
 process.exit(wrong ? 1 : 0);

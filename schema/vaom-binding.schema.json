@@ -82,7 +82,7 @@
         "record": {
           "enum": ["value", "digest", "omit"],
           "default": "value",
-          "description": "How the fact appears in decision records. 'digest' stores a salted hash, e.g. for a counterparty or a person: caps can still group by it, and the record doesn't reveal it."
+          "description": "How the fact appears in decision records. 'value' (the default, so amounts stay auditable) records it in clear. 'digest' records HMAC-SHA256 of the value under a key held outside the agent's reach: deterministic, so caps can still group by it, but a low-entropy identifier (a short vendor number, a name) can be recovered by anyone holding the key, and rotating the key breaks grouping across the rotation. 'omit' leaves it out. The linter warns about string facts left at 'value'."
         }
       }
     },
@@ -189,7 +189,7 @@
             "facts": {
               "type": "object",
               "propertyNames": { "$ref": "#/$defs/identifier" },
-              "additionalProperties": { "$ref": "#/$defs/extractor", "description": "Pointers here are relative to the item." }
+              "additionalProperties": { "$ref": "#/$defs/extractor", "description": "Pointers here are relative to the item. A name here must not repeat a per-call fact name: there is no precedence rule, so an overlap is a lint error." }
             },
             "maxItems": { "type": "integer", "minimum": 1, "description": "Larger batches can't be placed." }
           }
