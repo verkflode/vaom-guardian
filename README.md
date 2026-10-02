@@ -17,7 +17,13 @@ Early. Available so far:
 
 - `schema/`: JSON Schemas for the Delegation Authority Matrix (`vaom.matrix/0.1`, frozen; `0.2`, draft) and for binding an agent host's tools to matrix capabilities (`vaom.binding/0.1`, draft), with examples and tests. (The frozen 0.1 schema's own description still reads "Draft 0.1, a sketch": that text was frozen with it.)
 
+- `packages/core`: the pure core (no I/O, no eval, zero runtime dependencies, runs in Node and the browser). So far it holds the **linter**, `lintMatrix` and `lintBinding`: JSON Schema validation through validators compiled ahead of time, plus the rules JSON Schema can't express, such as reference integrity, uniqueness, currency consistency, lease lifetimes, sub-agent authority, funded review load, and the binding checked against its matrix. It fails closed: an unknown format or a schema failure is never accepted.
+
 The Guardian itself is not built yet.
+
+## Development
+
+Requires Node 22+ and pnpm. `pnpm install`, then `pnpm test` (core tests and schema tests) and `pnpm typecheck`. After changing a schema, run `pnpm gen:validators`; a test fails if the committed validators are stale.
 
 ## License
 

@@ -1,0 +1,23 @@
+{
+  "name": "vaom-guardian",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "gen:validators": "node scripts/gen-validators.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test && pnpm test:schema",
+    "test:schema": "node schema/test/run.mjs && node schema/test/run-binding.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

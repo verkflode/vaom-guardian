@@ -1,0 +1,15 @@
+{
+  "name": "@verkflode/vaom-guardian-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure core of VAOM Guardian: matrix and binding linting. No I/O, no eval, zero runtime dependencies; runs in Node and the browser.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  }
+}

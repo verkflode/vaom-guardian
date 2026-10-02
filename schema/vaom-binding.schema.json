@@ -82,7 +82,7 @@
         "record": {
           "enum": ["value", "digest", "omit"],
           "default": "value",
-          "description": "How the fact appears in decision records. 'value' (the default, so amounts stay auditable) records it in clear. 'digest' records HMAC-SHA256 of the value under a key held outside the agent's reach: deterministic, so caps can still group by it, but a low-entropy identifier (a short vendor number, a name) can be recovered by anyone holding the key, and rotating the key breaks grouping across the rotation. 'omit' leaves it out. The linter warns about string facts left at 'value'."
+          "description": "How the fact appears in decision records. 'value' (the default, so amounts stay auditable) records it in clear. 'digest' records HMAC-SHA256 of the value under a key held outside the agent's reach: deterministic, so caps can still group by it, but a low-entropy identifier (a short vendor number, a name) can be recovered by anyone holding the key, and rotating the key breaks grouping across the rotation. 'omit' leaves it out. The linter warns when a string fact doesn't set record explicitly."
         }
       }
     },

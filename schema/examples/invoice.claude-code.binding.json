@@ -10,7 +10,7 @@
   "facts": {
     "amount": { "type": "money", "description": "Invoice amount as it will be approved." },
     "counterparty": { "type": "string", "description": "Vendor id.", "record": "digest" },
-    "task": { "type": "string", "description": "Invoice id: the task the execution context is bound to." }
+    "task": { "type": "string", "description": "Invoice id: the task the execution context is bound to.", "record": "value" }
   },
 
   "tools": [

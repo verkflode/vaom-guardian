@@ -1,0 +1,5 @@
+packages:
+  - "packages/*"
+# Only esbuild may run an install script (it verifies its platform binary).
+allowBuilds:
+  esbuild: true

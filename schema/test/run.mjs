@@ -1,8 +1,9 @@
 // Schema tests for vaom.matrix. The shared cases run against both 0.1 (frozen) and 0.2 (draft), so the
-// invariants they check are checked on both versions. Each case mutates the version's invoice example once.
+// invariants they check are checked on both versions. The lint rules JSON Schema can't express are tested
+// in packages/core (the linter); this file tests the schemas alone. Each case mutates the version's invoice example once.
 // Names starting "POS-" must validate; every other case must be rejected.
 // Plus an exhaustive routing check against an oracle written independently of the schema's pair rules,
-// 0.2-only cases for preparatory rows, and a prototype of the matrix linter's preparatory rules.
+// and 0.2-only cases for preparatory rows and value ceilings.
 // Needs ajv and ajv-formats resolvable from here; see README.md.
 import Ajv from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
@@ -99,16 +100,7 @@ for (const [v, { validate, example }] of Object.entries(versions)) {
     if (want) accepted++;
     run(`${v} routing ${h}${md}${l}`, validate, m, want);
   }
-  // Review load of the example against funded hours (Condition 6). Arithmetic JSON Schema can't do;
-  // the matrix linter will own this check, and until then it guards the example.
-  const ex = base();
-  const load = ex.rows.reduce((sum, r) => {
-    const o = r.oversight; if (!o) return sum; const e = o.expectedPerWeek;
-    return sum + ((e.B ?? 0) * o.reviewMinutes + (e.C ?? 0) * o.escalationMinutes + (e.A ?? 0) * (o.auditSampleRate ?? 0) * (o.auditMinutes ?? 0)) / 60;
-  }, 0);
-  const allowed = ex.oversight.fundedReviewerHoursPerWeek * (ex.oversight.maxUtilization ?? 0.8);
-  if (load > allowed) { wrong++; console.log(`WRONG ${v} example review load ${load.toFixed(2)} h/week exceeds ${allowed.toFixed(2)} allowed`); }
-  summary.push(`${v}: example + ${Object.keys(cases).length} mutations + 27 routings (${accepted} monotone), load ${load.toFixed(2)}/${allowed.toFixed(2)} h`);
+  summary.push(`${v}: example + ${Object.keys(cases).length} mutations + 27 routings (${accepted} monotone)`);
 }
 
 // Each version rejects the other's example: the format identifier is a hard gate.
@@ -147,45 +139,7 @@ for (const [name, mutate] of Object.entries(prepCases)) { const m = base2(); mut
 // Known gap, kept visible: frozen 0.1 still accepts a financial Band A row with no ceiling. 0.2 closes it.
 { const m = JSON.parse(versions["0.1"].example); delete m.rows[0].authority.valueCeiling; run("0.1 frozen gap: silent ceiling still validates", versions["0.1"].validate, m, true); }
 
-// Prototype matrix linter, preparatory rules only (plus capability uniqueness and boundary refs, which
-// they depend on). Returns errors; empty means accepted.
-function lintMatrix(m) {
-  const errs = [], byId = new Map();
-  for (const r of m.rows) { if (byId.has(r.id)) errs.push(`duplicate row id ${r.id}`); byId.set(r.id, r); }
-  const owner = new Map();
-  for (const r of m.rows) for (const c of r.capabilities) {
-    if (owner.has(c)) errs.push(`capability ${c} claimed by ${owner.get(c)} and ${r.id}`); else owner.set(c, r.id);
-  }
-  for (const r of m.rows) {
-    for (const b of r.authority.boundaries ?? []) if (!m.boundaries?.[b]) errs.push(`${r.id}: unresolved boundary ${b}`);
-    if (r.authority.kind !== "preparatory") continue;
-    for (const s of r.authority.serves) {
-      const t = byId.get(s);
-      if (!t) errs.push(`${r.id}: serves unknown row ${s}`);
-      else if (t.authority.kind === "preparatory") errs.push(`${r.id}: serves preparatory row ${s}`);
-      else if (t.authority.kind === "non-delegable" && t.authority.agentMayPrepare !== true) errs.push(`${r.id}: serves ${s}, which doesn't allow preparation`);
-    }
-  }
-  return errs;
-}
-const exLint = lintMatrix(base2());
-if (exLint.length) { wrong++; console.log("WRONG 0.2 example lint:", exLint.join("; ")); }
-const lintCases = {
-  "lint-serves-unknown-row": m => { prep(m).authority.serves = ["invoice.approve", "invoice.pay"]; },
-  "lint-serves-preparatory-row": m => { m.rows[4].authority.serves = ["invoice.prepare"]; },
-  "lint-serves-nondelegable-without-prepare": m => { m.rows[2].authority.agentMayPrepare = false; },
-  "lint-prep-claims-decision-capability": m => { prep(m).capabilities.push("erp:invoice.approve"); },
-  "lint-unresolved-boundary": m => { prep(m).authority.boundaries = ["erp-read-only"]; },
-  "lint-duplicate-row-id": m => { m.rows[4].id = "invoice.prepare"; },
-};
-for (const [name, mutate] of Object.entries(lintCases)) {
-  const m = base2(); mutate(m);
-  if (!versions["0.2"].validate(m)) { wrong++; console.log("WRONG", name, "should be schema-valid so the lint rule is what rejects it"); continue; }
-  const errs = lintMatrix(m);
-  if (errs.length === 0) { wrong++; console.log("WRONG", name, "accepted by lint"); }
-}
-
 console.log(summary.join("\n"));
-console.log(`0.2 only: ${Object.keys(prepCases).length} schema cases (preparatory rows, value ceilings), ${Object.keys(lintCases).length} lint cases; cross-version: 2; frozen-gap record: 1`);
+console.log(`0.2 only: ${Object.keys(prepCases).length} schema cases (preparatory rows, value ceilings); cross-version: 2; frozen-gap record: 1`);
 console.log(`${wrong} wrong`);
 process.exit(wrong ? 1 : 0);
