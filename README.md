@@ -19,7 +19,9 @@ Early. Available so far:
 
 - `packages/core`: the pure core (no I/O, no eval, zero runtime dependencies, runs in Node and the browser). So far it holds the **linter**, `lintMatrix` and `lintBinding`: JSON Schema validation through validators compiled ahead of time, plus the rules JSON Schema can't express, such as reference integrity, uniqueness, currency consistency, lease lifetimes, sub-agent authority, funded review load, and the binding checked against its matrix. It fails closed: an unknown format or a schema failure is never accepted.
 
-The Guardian itself is not built yet.
+It also holds the **evaluator**, `compilePolicy` and `evaluate`: it places one tool call in a band from a lint-clean matrix and binding. The confidence score must come from the row's scoring policy, never the agent; ceilings, caps, restrictions and missing verification only ever narrow; batch items count toward caps together; and anything it can't place is `unplaceable`, never allowed. It returns the cap uses to reserve, for the cap store that comes next.
+
+The Guardian itself (the ACS wire, the cap store, contexts and leases, decision records) is not built yet.
 
 ## Development
 
