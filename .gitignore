@@ -4,6 +4,9 @@ BRIEF.md
 schema/NOTES.md
 notes/
 refs/
+# Secrets: never committed.
+.env
+.env.*
 
 node_modules/
 .DS_Store
