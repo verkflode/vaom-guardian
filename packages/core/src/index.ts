@@ -5,3 +5,7 @@ export { lintBinding, BINDING_FORMAT } from "./lint/binding.ts";
 export type { Finding, LintResult, Severity } from "./lint/types.ts";
 export { compilePolicy, evaluate } from "./eval/evaluate.ts";
 export type { Band, Call, CapUsage, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, Policy, Reason, Reservation, Score } from "./eval/types.ts";
+export { buildRecord, checkRecord, resolveRecord, RecordError, RECORD_FORMAT } from "./record/record.ts";
+export type { DecisionRecord, RecordedFact, RecordInput, Resolution } from "./record/record.ts";
+export { canonicalize } from "./canonical/jcs.ts";
+export { sha256, hmacSha256, hex } from "./crypto/sha256.ts";

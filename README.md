@@ -21,7 +21,9 @@ Early. Available so far:
 
 It also holds the **evaluator**, `compilePolicy` and `evaluate`: it places one tool call in a band from a lint-clean matrix and binding. The confidence score must come from the row's scoring policy, never the agent; ceilings, caps, restrictions and missing verification only ever narrow; batch items count toward caps together; and anything it can't place is `unplaceable`, never allowed. It returns the cap uses to reserve, for the cap store that comes next.
 
-The Guardian itself (the ACS wire, the cap store, contexts and leases, decision records) is not built yet.
+And it holds **decision records** (`vaom.decision/0.3`, schema in `schema/vaom-decision-0.3.schema.json`): each decision as replayable evidence (matrix and binding versions, outcome, band, approver, reasons, cap reservations, and later its resolution). Arguments are stored only as a digest; facts are recorded in clear, as a keyed digest, or not at all, as the binding says. A record that can't be built means no action.
+
+The Guardian itself (the ACS wire, the cap store, contexts and leases) is not built yet.
 
 ## Development
 

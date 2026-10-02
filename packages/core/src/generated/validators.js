@@ -17611,8 +17611,2014 @@ function validate91(data, { instancePath = "", parentData, parentDataProperty, r
   return errors === 0;
 }
 validate91.evaluated = { "props": true, "dynamicProps": false, "dynamicItems": false };
+var validateDecision03 = validate99;
+var schema205 = { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "urn:verkflode:vaom:decision:0.3", "title": "VAOM decision record", "description": "One Guardian decision, replayable: what was asked, under which matrix and binding versions, what was decided and why, and (once known) how it resolved. Tool arguments are never stored, only a digest of their canonical form; each fact appears in clear, as a keyed digest, or not at all, as the binding's record mode says. A record is written when the request is decided and gains a resolution later, so pending approvals still count against caps. Draft 0.3.", "type": "object", "required": ["format", "id", "request", "policy", "decision", "reservations"], "additionalProperties": false, "properties": { "format": { "const": "vaom.decision/0.3" }, "id": { "type": "string", "minLength": 1, "description": "Unique per decision; assigned by the Guardian." }, "request": { "type": "object", "required": ["ts", "agent", "session", "action"], "additionalProperties": false, "properties": { "ts": { "type": "string", "format": "date-time" }, "agent": { "type": "object", "required": ["id"], "additionalProperties": false, "properties": { "id": { "type": "string", "minLength": 1 }, "version": { "type": "string" }, "model": { "type": "object", "required": ["id"], "additionalProperties": false, "description": "The model behind the agent, so a decision can be traced to a model version.", "properties": { "id": { "type": "string" }, "version": { "type": "string" } } } } }, "session": { "type": "object", "required": ["id"], "additionalProperties": false, "properties": { "id": { "type": "string", "minLength": 1 }, "unattended": { "type": "boolean" } } }, "context": { "type": "object", "required": ["id", "rows"], "additionalProperties": false, "description": "The delegated execution context (or lease) the call ran under.", "properties": { "id": { "type": "string" }, "rows": { "type": "array", "items": { "type": "string" } }, "lease": { "type": "string" } } }, "action": { "type": "object", "required": ["tool", "params_digest"], "additionalProperties": false, "properties": { "tool": { "type": "string" }, "params_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "SHA-256 of the RFC 8785 (JCS) form of the unwrapped arguments." }, "declared_capability": { "type": "string" } } }, "scores": { "type": "object", "description": "Scores supplied for the capabilities this call touched, keyed by capability.", "additionalProperties": { "type": "object", "required": ["value", "policy"], "additionalProperties": false, "properties": { "value": { "type": "number" }, "policy": { "type": "object", "required": ["id", "version"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "version": { "type": "string" } } }, "verified": { "type": "boolean" } } } }, "wire": { "type": "object", "required": ["protocol", "version"], "additionalProperties": false, "description": "The protocol the call arrived on, e.g. ACS, with its correlation fields.", "properties": { "protocol": { "type": "string" }, "version": { "type": "string" }, "request_id": { "type": "string" }, "chain_hash": { "type": "string" } } } } }, "policy": { "type": "object", "required": ["matrix", "binding"], "additionalProperties": false, "properties": { "matrix": { "$ref": "#/$defs/versioned" }, "binding": { "$ref": "#/$defs/versioned" } } }, "decision": { "type": "object", "required": ["outcome", "band", "placements", "reasons"], "additionalProperties": false, "properties": { "outcome": { "$ref": "#/$defs/outcome" }, "band": { "$ref": "#/$defs/band" }, "approver_role": { "type": "string" }, "placements": { "type": "array", "items": { "type": "object", "required": ["row", "capability", "entry", "band", "outcome", "facts"], "additionalProperties": false, "properties": { "row": { "type": "string" }, "capability": { "type": "string" }, "entry": { "type": "string" }, "band": { "$ref": "#/$defs/band" }, "outcome": { "$ref": "#/$defs/outcome" }, "approver_role": { "type": "string" }, "facts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/recordedFact" } } } } }, "reasons": { "type": "array", "items": { "$ref": "#/$defs/reason" } } } }, "reservations": { "type": "array", "description": "Cap uses this decision holds. 'group' is a keyed digest whenever a grouped fact isn't recorded in clear.", "items": { "type": "object", "required": ["cap", "row", "group", "count"], "additionalProperties": false, "properties": { "cap": { "type": "string" }, "row": { "type": "string" }, "group": { "type": "string" }, "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)(\\.\\d+)?$" }, "count": { "const": 1 } } } }, "resolution": { "type": "object", "required": ["ts", "result"], "additionalProperties": false, "description": "How the decision ended. Absent while an approval is pending.", "properties": { "ts": { "type": "string", "format": "date-time" }, "result": { "enum": ["executed", "rejected", "expired", "withdrawn", "not-executed"], "description": "executed: the action ran. rejected: the approver said no. expired: no approval in time. withdrawn: the agent abandoned it. not-executed: refused or unplaceable, so it never ran." }, "approval": { "type": "object", "required": ["approver_role", "record"], "additionalProperties": false, "description": "The human approval record this rests on; required when a review or escalation was executed.", "properties": { "approver_role": { "type": "string" }, "approver_id": { "type": "string", "description": "Only when the deployment records approvers individually, which is employee monitoring and off by default." }, "record": { "type": "string", "description": "Reference to the approval record." }, "latency_ms": { "type": "integer", "minimum": 0 } } } } } }, "allOf": [{ "$comment": "A refused or unplaceable decision never executed.", "if": { "properties": { "decision": { "properties": { "outcome": { "enum": ["refuse", "unplaceable"] } } } } }, "then": { "properties": { "resolution": { "properties": { "result": { "const": "not-executed" } } } } } }, { "$comment": "A review or escalation that executed rests on an approval record.", "if": { "properties": { "decision": { "properties": { "outcome": { "enum": ["review", "escalate"] } } }, "resolution": { "properties": { "result": { "const": "executed" } }, "required": ["result"] } }, "required": ["resolution"] }, "then": { "properties": { "resolution": { "required": ["approval"] } } } }], "$defs": { "versioned": { "type": "object", "required": ["id", "version"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "version": { "type": "string" } } }, "outcome": { "enum": ["allow", "review", "escalate", "refuse", "unplaceable"] }, "band": { "enum": ["A", "B", "C", "non-delegable", null] }, "reason": { "type": "object", "required": ["code"], "additionalProperties": false, "properties": { "code": { "type": "string" }, "detail": { "type": "string" }, "row": { "type": "string" } } }, "recordedFact": { "oneOf": [{ "type": "object", "required": ["value"], "additionalProperties": false, "properties": { "value": {} } }, { "type": "object", "required": ["digest"], "additionalProperties": false, "properties": { "digest": { "type": "string", "pattern": "^hmac-sha256:[0-9a-f]{64}$" } } }, { "type": "object", "required": ["omitted"], "additionalProperties": false, "properties": { "omitted": { "const": true } } }] } } };
+var schema208 = { "enum": ["allow", "review", "escalate", "refuse", "unplaceable"] };
+var schema209 = { "enum": ["A", "B", "C", "non-delegable", null] };
+var pattern111 = new RegExp("^sha256:[0-9a-f]{64}$", "u");
+var pattern112 = new RegExp("^hmac-sha256:[0-9a-f]{64}$", "u");
+function validate99(data, { instancePath = "", parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {}) {
+  ;
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate99.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  const _errs3 = errors;
+  let valid1 = true;
+  const _errs4 = errors;
+  if (data && typeof data == "object" && !Array.isArray(data)) {
+    if (data.decision !== void 0) {
+      let data0 = data.decision;
+      if (data0 && typeof data0 == "object" && !Array.isArray(data0)) {
+        if (data0.outcome !== void 0) {
+          let data1 = data0.outcome;
+          if (!(data1 === "refuse" || data1 === "unplaceable")) {
+            const err0 = {};
+            if (vErrors === null) {
+              vErrors = [err0];
+            } else {
+              vErrors.push(err0);
+            }
+            errors++;
+          }
+        }
+      }
+    }
+  }
+  var _valid0 = _errs4 === errors;
+  errors = _errs3;
+  if (vErrors !== null) {
+    if (_errs3) {
+      vErrors.length = _errs3;
+    } else {
+      vErrors = null;
+    }
+  }
+  if (_valid0) {
+    const _errs7 = errors;
+    if (data && typeof data == "object" && !Array.isArray(data)) {
+      if (data.resolution !== void 0) {
+        let data2 = data.resolution;
+        if (data2 && typeof data2 == "object" && !Array.isArray(data2)) {
+          if (data2.result !== void 0) {
+            if ("not-executed" !== data2.result) {
+              const err1 = { instancePath: instancePath + "/resolution/result", schemaPath: "#/allOf/0/then/properties/resolution/properties/result/const", keyword: "const", params: { allowedValue: "not-executed" }, message: "must be equal to constant" };
+              if (vErrors === null) {
+                vErrors = [err1];
+              } else {
+                vErrors.push(err1);
+              }
+              errors++;
+            }
+          }
+        }
+      }
+    }
+    var _valid0 = _errs7 === errors;
+    valid1 = _valid0;
+    if (valid1) {
+      var props0 = {};
+      props0.resolution = true;
+      props0.decision = true;
+    }
+  }
+  if (!valid1) {
+    const err2 = { instancePath, schemaPath: "#/allOf/0/if", keyword: "if", params: { failingKeyword: "then" }, message: 'must match "then" schema' };
+    if (vErrors === null) {
+      vErrors = [err2];
+    } else {
+      vErrors.push(err2);
+    }
+    errors++;
+  }
+  const _errs12 = errors;
+  let valid6 = true;
+  const _errs13 = errors;
+  if (data && typeof data == "object" && !Array.isArray(data)) {
+    let missing0;
+    if (data.resolution === void 0 && (missing0 = "resolution")) {
+      const err3 = {};
+      if (vErrors === null) {
+        vErrors = [err3];
+      } else {
+        vErrors.push(err3);
+      }
+      errors++;
+    } else {
+      if (data.decision !== void 0) {
+        let data4 = data.decision;
+        const _errs14 = errors;
+        if (data4 && typeof data4 == "object" && !Array.isArray(data4)) {
+          if (data4.outcome !== void 0) {
+            let data5 = data4.outcome;
+            if (!(data5 === "review" || data5 === "escalate")) {
+              const err4 = {};
+              if (vErrors === null) {
+                vErrors = [err4];
+              } else {
+                vErrors.push(err4);
+              }
+              errors++;
+            }
+          }
+        }
+        var valid7 = _errs14 === errors;
+      } else {
+        var valid7 = true;
+      }
+      if (valid7) {
+        if (data.resolution !== void 0) {
+          let data6 = data.resolution;
+          const _errs16 = errors;
+          if (data6 && typeof data6 == "object" && !Array.isArray(data6)) {
+            let missing1;
+            if (data6.result === void 0 && (missing1 = "result")) {
+              const err5 = {};
+              if (vErrors === null) {
+                vErrors = [err5];
+              } else {
+                vErrors.push(err5);
+              }
+              errors++;
+            } else {
+              if (data6.result !== void 0) {
+                if ("executed" !== data6.result) {
+                  const err6 = {};
+                  if (vErrors === null) {
+                    vErrors = [err6];
+                  } else {
+                    vErrors.push(err6);
+                  }
+                  errors++;
+                }
+              }
+            }
+          }
+          var valid7 = _errs16 === errors;
+        } else {
+          var valid7 = true;
+        }
+      }
+    }
+  }
+  var _valid1 = _errs13 === errors;
+  errors = _errs12;
+  if (vErrors !== null) {
+    if (_errs12) {
+      vErrors.length = _errs12;
+    } else {
+      vErrors = null;
+    }
+  }
+  if (_valid1) {
+    const _errs18 = errors;
+    if (data && typeof data == "object" && !Array.isArray(data)) {
+      if (data.resolution !== void 0) {
+        let data8 = data.resolution;
+        if (data8 && typeof data8 == "object" && !Array.isArray(data8)) {
+          if (data8.approval === void 0) {
+            const err7 = { instancePath: instancePath + "/resolution", schemaPath: "#/allOf/1/then/properties/resolution/required", keyword: "required", params: { missingProperty: "approval" }, message: "must have required property 'approval'" };
+            if (vErrors === null) {
+              vErrors = [err7];
+            } else {
+              vErrors.push(err7);
+            }
+            errors++;
+          }
+        }
+      }
+    }
+    var _valid1 = _errs18 === errors;
+    valid6 = _valid1;
+    if (valid6) {
+      var props1 = {};
+      props1.resolution = true;
+      props1.decision = true;
+    }
+  }
+  if (!valid6) {
+    const err8 = { instancePath, schemaPath: "#/allOf/1/if", keyword: "if", params: { failingKeyword: "then" }, message: 'must match "then" schema' };
+    if (vErrors === null) {
+      vErrors = [err8];
+    } else {
+      vErrors.push(err8);
+    }
+    errors++;
+  }
+  if (props0 !== true && props1 !== void 0) {
+    if (props1 === true) {
+      props0 = true;
+    } else {
+      props0 = props0 || {};
+      Object.assign(props0, props1);
+    }
+  }
+  if (data && typeof data == "object" && !Array.isArray(data)) {
+    if (data.format === void 0) {
+      const err9 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "format" }, message: "must have required property 'format'" };
+      if (vErrors === null) {
+        vErrors = [err9];
+      } else {
+        vErrors.push(err9);
+      }
+      errors++;
+    }
+    if (data.id === void 0) {
+      const err10 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+      if (vErrors === null) {
+        vErrors = [err10];
+      } else {
+        vErrors.push(err10);
+      }
+      errors++;
+    }
+    if (data.request === void 0) {
+      const err11 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "request" }, message: "must have required property 'request'" };
+      if (vErrors === null) {
+        vErrors = [err11];
+      } else {
+        vErrors.push(err11);
+      }
+      errors++;
+    }
+    if (data.policy === void 0) {
+      const err12 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "policy" }, message: "must have required property 'policy'" };
+      if (vErrors === null) {
+        vErrors = [err12];
+      } else {
+        vErrors.push(err12);
+      }
+      errors++;
+    }
+    if (data.decision === void 0) {
+      const err13 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "decision" }, message: "must have required property 'decision'" };
+      if (vErrors === null) {
+        vErrors = [err13];
+      } else {
+        vErrors.push(err13);
+      }
+      errors++;
+    }
+    if (data.reservations === void 0) {
+      const err14 = { instancePath, schemaPath: "#/required", keyword: "required", params: { missingProperty: "reservations" }, message: "must have required property 'reservations'" };
+      if (vErrors === null) {
+        vErrors = [err14];
+      } else {
+        vErrors.push(err14);
+      }
+      errors++;
+    }
+    for (const key0 in data) {
+      if (!(key0 === "format" || key0 === "id" || key0 === "request" || key0 === "policy" || key0 === "decision" || key0 === "reservations" || key0 === "resolution")) {
+        const err15 = { instancePath, schemaPath: "#/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key0 }, message: "must NOT have additional properties" };
+        if (vErrors === null) {
+          vErrors = [err15];
+        } else {
+          vErrors.push(err15);
+        }
+        errors++;
+      }
+    }
+    if (data.format !== void 0) {
+      if ("vaom.decision/0.3" !== data.format) {
+        const err16 = { instancePath: instancePath + "/format", schemaPath: "#/properties/format/const", keyword: "const", params: { allowedValue: "vaom.decision/0.3" }, message: "must be equal to constant" };
+        if (vErrors === null) {
+          vErrors = [err16];
+        } else {
+          vErrors.push(err16);
+        }
+        errors++;
+      }
+    }
+    if (data.id !== void 0) {
+      let data10 = data.id;
+      if (typeof data10 === "string") {
+        if (func2(data10) < 1) {
+          const err17 = { instancePath: instancePath + "/id", schemaPath: "#/properties/id/minLength", keyword: "minLength", params: { limit: 1 }, message: "must NOT have fewer than 1 characters" };
+          if (vErrors === null) {
+            vErrors = [err17];
+          } else {
+            vErrors.push(err17);
+          }
+          errors++;
+        }
+      } else {
+        const err18 = { instancePath: instancePath + "/id", schemaPath: "#/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+        if (vErrors === null) {
+          vErrors = [err18];
+        } else {
+          vErrors.push(err18);
+        }
+        errors++;
+      }
+    }
+    if (data.request !== void 0) {
+      let data11 = data.request;
+      if (data11 && typeof data11 == "object" && !Array.isArray(data11)) {
+        if (data11.ts === void 0) {
+          const err19 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/required", keyword: "required", params: { missingProperty: "ts" }, message: "must have required property 'ts'" };
+          if (vErrors === null) {
+            vErrors = [err19];
+          } else {
+            vErrors.push(err19);
+          }
+          errors++;
+        }
+        if (data11.agent === void 0) {
+          const err20 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/required", keyword: "required", params: { missingProperty: "agent" }, message: "must have required property 'agent'" };
+          if (vErrors === null) {
+            vErrors = [err20];
+          } else {
+            vErrors.push(err20);
+          }
+          errors++;
+        }
+        if (data11.session === void 0) {
+          const err21 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/required", keyword: "required", params: { missingProperty: "session" }, message: "must have required property 'session'" };
+          if (vErrors === null) {
+            vErrors = [err21];
+          } else {
+            vErrors.push(err21);
+          }
+          errors++;
+        }
+        if (data11.action === void 0) {
+          const err22 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/required", keyword: "required", params: { missingProperty: "action" }, message: "must have required property 'action'" };
+          if (vErrors === null) {
+            vErrors = [err22];
+          } else {
+            vErrors.push(err22);
+          }
+          errors++;
+        }
+        for (const key1 in data11) {
+          if (!(key1 === "ts" || key1 === "agent" || key1 === "session" || key1 === "context" || key1 === "action" || key1 === "scores" || key1 === "wire")) {
+            const err23 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key1 }, message: "must NOT have additional properties" };
+            if (vErrors === null) {
+              vErrors = [err23];
+            } else {
+              vErrors.push(err23);
+            }
+            errors++;
+          }
+        }
+        if (data11.ts !== void 0) {
+          let data12 = data11.ts;
+          if (typeof data12 === "string") {
+            if (!formats0.validate(data12)) {
+              const err24 = { instancePath: instancePath + "/request/ts", schemaPath: "#/properties/request/properties/ts/format", keyword: "format", params: { format: "date-time" }, message: 'must match format "date-time"' };
+              if (vErrors === null) {
+                vErrors = [err24];
+              } else {
+                vErrors.push(err24);
+              }
+              errors++;
+            }
+          } else {
+            const err25 = { instancePath: instancePath + "/request/ts", schemaPath: "#/properties/request/properties/ts/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+            if (vErrors === null) {
+              vErrors = [err25];
+            } else {
+              vErrors.push(err25);
+            }
+            errors++;
+          }
+        }
+        if (data11.agent !== void 0) {
+          let data13 = data11.agent;
+          if (data13 && typeof data13 == "object" && !Array.isArray(data13)) {
+            if (data13.id === void 0) {
+              const err26 = { instancePath: instancePath + "/request/agent", schemaPath: "#/properties/request/properties/agent/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+              if (vErrors === null) {
+                vErrors = [err26];
+              } else {
+                vErrors.push(err26);
+              }
+              errors++;
+            }
+            for (const key2 in data13) {
+              if (!(key2 === "id" || key2 === "version" || key2 === "model")) {
+                const err27 = { instancePath: instancePath + "/request/agent", schemaPath: "#/properties/request/properties/agent/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key2 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err27];
+                } else {
+                  vErrors.push(err27);
+                }
+                errors++;
+              }
+            }
+            if (data13.id !== void 0) {
+              let data14 = data13.id;
+              if (typeof data14 === "string") {
+                if (func2(data14) < 1) {
+                  const err28 = { instancePath: instancePath + "/request/agent/id", schemaPath: "#/properties/request/properties/agent/properties/id/minLength", keyword: "minLength", params: { limit: 1 }, message: "must NOT have fewer than 1 characters" };
+                  if (vErrors === null) {
+                    vErrors = [err28];
+                  } else {
+                    vErrors.push(err28);
+                  }
+                  errors++;
+                }
+              } else {
+                const err29 = { instancePath: instancePath + "/request/agent/id", schemaPath: "#/properties/request/properties/agent/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err29];
+                } else {
+                  vErrors.push(err29);
+                }
+                errors++;
+              }
+            }
+            if (data13.version !== void 0) {
+              if (typeof data13.version !== "string") {
+                const err30 = { instancePath: instancePath + "/request/agent/version", schemaPath: "#/properties/request/properties/agent/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err30];
+                } else {
+                  vErrors.push(err30);
+                }
+                errors++;
+              }
+            }
+            if (data13.model !== void 0) {
+              let data16 = data13.model;
+              if (data16 && typeof data16 == "object" && !Array.isArray(data16)) {
+                if (data16.id === void 0) {
+                  const err31 = { instancePath: instancePath + "/request/agent/model", schemaPath: "#/properties/request/properties/agent/properties/model/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+                  if (vErrors === null) {
+                    vErrors = [err31];
+                  } else {
+                    vErrors.push(err31);
+                  }
+                  errors++;
+                }
+                for (const key3 in data16) {
+                  if (!(key3 === "id" || key3 === "version")) {
+                    const err32 = { instancePath: instancePath + "/request/agent/model", schemaPath: "#/properties/request/properties/agent/properties/model/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key3 }, message: "must NOT have additional properties" };
+                    if (vErrors === null) {
+                      vErrors = [err32];
+                    } else {
+                      vErrors.push(err32);
+                    }
+                    errors++;
+                  }
+                }
+                if (data16.id !== void 0) {
+                  if (typeof data16.id !== "string") {
+                    const err33 = { instancePath: instancePath + "/request/agent/model/id", schemaPath: "#/properties/request/properties/agent/properties/model/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err33];
+                    } else {
+                      vErrors.push(err33);
+                    }
+                    errors++;
+                  }
+                }
+                if (data16.version !== void 0) {
+                  if (typeof data16.version !== "string") {
+                    const err34 = { instancePath: instancePath + "/request/agent/model/version", schemaPath: "#/properties/request/properties/agent/properties/model/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err34];
+                    } else {
+                      vErrors.push(err34);
+                    }
+                    errors++;
+                  }
+                }
+              } else {
+                const err35 = { instancePath: instancePath + "/request/agent/model", schemaPath: "#/properties/request/properties/agent/properties/model/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                if (vErrors === null) {
+                  vErrors = [err35];
+                } else {
+                  vErrors.push(err35);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err36 = { instancePath: instancePath + "/request/agent", schemaPath: "#/properties/request/properties/agent/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err36];
+            } else {
+              vErrors.push(err36);
+            }
+            errors++;
+          }
+        }
+        if (data11.session !== void 0) {
+          let data19 = data11.session;
+          if (data19 && typeof data19 == "object" && !Array.isArray(data19)) {
+            if (data19.id === void 0) {
+              const err37 = { instancePath: instancePath + "/request/session", schemaPath: "#/properties/request/properties/session/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+              if (vErrors === null) {
+                vErrors = [err37];
+              } else {
+                vErrors.push(err37);
+              }
+              errors++;
+            }
+            for (const key4 in data19) {
+              if (!(key4 === "id" || key4 === "unattended")) {
+                const err38 = { instancePath: instancePath + "/request/session", schemaPath: "#/properties/request/properties/session/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key4 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err38];
+                } else {
+                  vErrors.push(err38);
+                }
+                errors++;
+              }
+            }
+            if (data19.id !== void 0) {
+              let data20 = data19.id;
+              if (typeof data20 === "string") {
+                if (func2(data20) < 1) {
+                  const err39 = { instancePath: instancePath + "/request/session/id", schemaPath: "#/properties/request/properties/session/properties/id/minLength", keyword: "minLength", params: { limit: 1 }, message: "must NOT have fewer than 1 characters" };
+                  if (vErrors === null) {
+                    vErrors = [err39];
+                  } else {
+                    vErrors.push(err39);
+                  }
+                  errors++;
+                }
+              } else {
+                const err40 = { instancePath: instancePath + "/request/session/id", schemaPath: "#/properties/request/properties/session/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err40];
+                } else {
+                  vErrors.push(err40);
+                }
+                errors++;
+              }
+            }
+            if (data19.unattended !== void 0) {
+              if (typeof data19.unattended !== "boolean") {
+                const err41 = { instancePath: instancePath + "/request/session/unattended", schemaPath: "#/properties/request/properties/session/properties/unattended/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" };
+                if (vErrors === null) {
+                  vErrors = [err41];
+                } else {
+                  vErrors.push(err41);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err42 = { instancePath: instancePath + "/request/session", schemaPath: "#/properties/request/properties/session/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err42];
+            } else {
+              vErrors.push(err42);
+            }
+            errors++;
+          }
+        }
+        if (data11.context !== void 0) {
+          let data22 = data11.context;
+          if (data22 && typeof data22 == "object" && !Array.isArray(data22)) {
+            if (data22.id === void 0) {
+              const err43 = { instancePath: instancePath + "/request/context", schemaPath: "#/properties/request/properties/context/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+              if (vErrors === null) {
+                vErrors = [err43];
+              } else {
+                vErrors.push(err43);
+              }
+              errors++;
+            }
+            if (data22.rows === void 0) {
+              const err44 = { instancePath: instancePath + "/request/context", schemaPath: "#/properties/request/properties/context/required", keyword: "required", params: { missingProperty: "rows" }, message: "must have required property 'rows'" };
+              if (vErrors === null) {
+                vErrors = [err44];
+              } else {
+                vErrors.push(err44);
+              }
+              errors++;
+            }
+            for (const key5 in data22) {
+              if (!(key5 === "id" || key5 === "rows" || key5 === "lease")) {
+                const err45 = { instancePath: instancePath + "/request/context", schemaPath: "#/properties/request/properties/context/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key5 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err45];
+                } else {
+                  vErrors.push(err45);
+                }
+                errors++;
+              }
+            }
+            if (data22.id !== void 0) {
+              if (typeof data22.id !== "string") {
+                const err46 = { instancePath: instancePath + "/request/context/id", schemaPath: "#/properties/request/properties/context/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err46];
+                } else {
+                  vErrors.push(err46);
+                }
+                errors++;
+              }
+            }
+            if (data22.rows !== void 0) {
+              let data24 = data22.rows;
+              if (Array.isArray(data24)) {
+                const len0 = data24.length;
+                for (let i0 = 0; i0 < len0; i0++) {
+                  if (typeof data24[i0] !== "string") {
+                    const err47 = { instancePath: instancePath + "/request/context/rows/" + i0, schemaPath: "#/properties/request/properties/context/properties/rows/items/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err47];
+                    } else {
+                      vErrors.push(err47);
+                    }
+                    errors++;
+                  }
+                }
+              } else {
+                const err48 = { instancePath: instancePath + "/request/context/rows", schemaPath: "#/properties/request/properties/context/properties/rows/type", keyword: "type", params: { type: "array" }, message: "must be array" };
+                if (vErrors === null) {
+                  vErrors = [err48];
+                } else {
+                  vErrors.push(err48);
+                }
+                errors++;
+              }
+            }
+            if (data22.lease !== void 0) {
+              if (typeof data22.lease !== "string") {
+                const err49 = { instancePath: instancePath + "/request/context/lease", schemaPath: "#/properties/request/properties/context/properties/lease/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err49];
+                } else {
+                  vErrors.push(err49);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err50 = { instancePath: instancePath + "/request/context", schemaPath: "#/properties/request/properties/context/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err50];
+            } else {
+              vErrors.push(err50);
+            }
+            errors++;
+          }
+        }
+        if (data11.action !== void 0) {
+          let data27 = data11.action;
+          if (data27 && typeof data27 == "object" && !Array.isArray(data27)) {
+            if (data27.tool === void 0) {
+              const err51 = { instancePath: instancePath + "/request/action", schemaPath: "#/properties/request/properties/action/required", keyword: "required", params: { missingProperty: "tool" }, message: "must have required property 'tool'" };
+              if (vErrors === null) {
+                vErrors = [err51];
+              } else {
+                vErrors.push(err51);
+              }
+              errors++;
+            }
+            if (data27.params_digest === void 0) {
+              const err52 = { instancePath: instancePath + "/request/action", schemaPath: "#/properties/request/properties/action/required", keyword: "required", params: { missingProperty: "params_digest" }, message: "must have required property 'params_digest'" };
+              if (vErrors === null) {
+                vErrors = [err52];
+              } else {
+                vErrors.push(err52);
+              }
+              errors++;
+            }
+            for (const key6 in data27) {
+              if (!(key6 === "tool" || key6 === "params_digest" || key6 === "declared_capability")) {
+                const err53 = { instancePath: instancePath + "/request/action", schemaPath: "#/properties/request/properties/action/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key6 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err53];
+                } else {
+                  vErrors.push(err53);
+                }
+                errors++;
+              }
+            }
+            if (data27.tool !== void 0) {
+              if (typeof data27.tool !== "string") {
+                const err54 = { instancePath: instancePath + "/request/action/tool", schemaPath: "#/properties/request/properties/action/properties/tool/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err54];
+                } else {
+                  vErrors.push(err54);
+                }
+                errors++;
+              }
+            }
+            if (data27.params_digest !== void 0) {
+              let data29 = data27.params_digest;
+              if (typeof data29 === "string") {
+                if (!pattern111.test(data29)) {
+                  const err55 = { instancePath: instancePath + "/request/action/params_digest", schemaPath: "#/properties/request/properties/action/properties/params_digest/pattern", keyword: "pattern", params: { pattern: "^sha256:[0-9a-f]{64}$" }, message: 'must match pattern "^sha256:[0-9a-f]{64}$"' };
+                  if (vErrors === null) {
+                    vErrors = [err55];
+                  } else {
+                    vErrors.push(err55);
+                  }
+                  errors++;
+                }
+              } else {
+                const err56 = { instancePath: instancePath + "/request/action/params_digest", schemaPath: "#/properties/request/properties/action/properties/params_digest/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err56];
+                } else {
+                  vErrors.push(err56);
+                }
+                errors++;
+              }
+            }
+            if (data27.declared_capability !== void 0) {
+              if (typeof data27.declared_capability !== "string") {
+                const err57 = { instancePath: instancePath + "/request/action/declared_capability", schemaPath: "#/properties/request/properties/action/properties/declared_capability/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err57];
+                } else {
+                  vErrors.push(err57);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err58 = { instancePath: instancePath + "/request/action", schemaPath: "#/properties/request/properties/action/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err58];
+            } else {
+              vErrors.push(err58);
+            }
+            errors++;
+          }
+        }
+        if (data11.scores !== void 0) {
+          let data31 = data11.scores;
+          if (data31 && typeof data31 == "object" && !Array.isArray(data31)) {
+            for (const key7 in data31) {
+              let data32 = data31[key7];
+              if (data32 && typeof data32 == "object" && !Array.isArray(data32)) {
+                if (data32.value === void 0) {
+                  const err59 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/properties/request/properties/scores/additionalProperties/required", keyword: "required", params: { missingProperty: "value" }, message: "must have required property 'value'" };
+                  if (vErrors === null) {
+                    vErrors = [err59];
+                  } else {
+                    vErrors.push(err59);
+                  }
+                  errors++;
+                }
+                if (data32.policy === void 0) {
+                  const err60 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/properties/request/properties/scores/additionalProperties/required", keyword: "required", params: { missingProperty: "policy" }, message: "must have required property 'policy'" };
+                  if (vErrors === null) {
+                    vErrors = [err60];
+                  } else {
+                    vErrors.push(err60);
+                  }
+                  errors++;
+                }
+                for (const key8 in data32) {
+                  if (!(key8 === "value" || key8 === "policy" || key8 === "verified")) {
+                    const err61 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/properties/request/properties/scores/additionalProperties/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key8 }, message: "must NOT have additional properties" };
+                    if (vErrors === null) {
+                      vErrors = [err61];
+                    } else {
+                      vErrors.push(err61);
+                    }
+                    errors++;
+                  }
+                }
+                if (data32.value !== void 0) {
+                  let data33 = data32.value;
+                  if (!(typeof data33 == "number" && isFinite(data33))) {
+                    const err62 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/value", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/value/type", keyword: "type", params: { type: "number" }, message: "must be number" };
+                    if (vErrors === null) {
+                      vErrors = [err62];
+                    } else {
+                      vErrors.push(err62);
+                    }
+                    errors++;
+                  }
+                }
+                if (data32.policy !== void 0) {
+                  let data34 = data32.policy;
+                  if (data34 && typeof data34 == "object" && !Array.isArray(data34)) {
+                    if (data34.id === void 0) {
+                      const err63 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+                      if (vErrors === null) {
+                        vErrors = [err63];
+                      } else {
+                        vErrors.push(err63);
+                      }
+                      errors++;
+                    }
+                    if (data34.version === void 0) {
+                      const err64 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/required", keyword: "required", params: { missingProperty: "version" }, message: "must have required property 'version'" };
+                      if (vErrors === null) {
+                        vErrors = [err64];
+                      } else {
+                        vErrors.push(err64);
+                      }
+                      errors++;
+                    }
+                    for (const key9 in data34) {
+                      if (!(key9 === "id" || key9 === "version")) {
+                        const err65 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key9 }, message: "must NOT have additional properties" };
+                        if (vErrors === null) {
+                          vErrors = [err65];
+                        } else {
+                          vErrors.push(err65);
+                        }
+                        errors++;
+                      }
+                    }
+                    if (data34.id !== void 0) {
+                      if (typeof data34.id !== "string") {
+                        const err66 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy/id", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                        if (vErrors === null) {
+                          vErrors = [err66];
+                        } else {
+                          vErrors.push(err66);
+                        }
+                        errors++;
+                      }
+                    }
+                    if (data34.version !== void 0) {
+                      if (typeof data34.version !== "string") {
+                        const err67 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy/version", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                        if (vErrors === null) {
+                          vErrors = [err67];
+                        } else {
+                          vErrors.push(err67);
+                        }
+                        errors++;
+                      }
+                    }
+                  } else {
+                    const err68 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/policy", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/policy/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                    if (vErrors === null) {
+                      vErrors = [err68];
+                    } else {
+                      vErrors.push(err68);
+                    }
+                    errors++;
+                  }
+                }
+                if (data32.verified !== void 0) {
+                  if (typeof data32.verified !== "boolean") {
+                    const err69 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1") + "/verified", schemaPath: "#/properties/request/properties/scores/additionalProperties/properties/verified/type", keyword: "type", params: { type: "boolean" }, message: "must be boolean" };
+                    if (vErrors === null) {
+                      vErrors = [err69];
+                    } else {
+                      vErrors.push(err69);
+                    }
+                    errors++;
+                  }
+                }
+              } else {
+                const err70 = { instancePath: instancePath + "/request/scores/" + key7.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/properties/request/properties/scores/additionalProperties/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                if (vErrors === null) {
+                  vErrors = [err70];
+                } else {
+                  vErrors.push(err70);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err71 = { instancePath: instancePath + "/request/scores", schemaPath: "#/properties/request/properties/scores/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err71];
+            } else {
+              vErrors.push(err71);
+            }
+            errors++;
+          }
+        }
+        if (data11.wire !== void 0) {
+          let data38 = data11.wire;
+          if (data38 && typeof data38 == "object" && !Array.isArray(data38)) {
+            if (data38.protocol === void 0) {
+              const err72 = { instancePath: instancePath + "/request/wire", schemaPath: "#/properties/request/properties/wire/required", keyword: "required", params: { missingProperty: "protocol" }, message: "must have required property 'protocol'" };
+              if (vErrors === null) {
+                vErrors = [err72];
+              } else {
+                vErrors.push(err72);
+              }
+              errors++;
+            }
+            if (data38.version === void 0) {
+              const err73 = { instancePath: instancePath + "/request/wire", schemaPath: "#/properties/request/properties/wire/required", keyword: "required", params: { missingProperty: "version" }, message: "must have required property 'version'" };
+              if (vErrors === null) {
+                vErrors = [err73];
+              } else {
+                vErrors.push(err73);
+              }
+              errors++;
+            }
+            for (const key10 in data38) {
+              if (!(key10 === "protocol" || key10 === "version" || key10 === "request_id" || key10 === "chain_hash")) {
+                const err74 = { instancePath: instancePath + "/request/wire", schemaPath: "#/properties/request/properties/wire/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key10 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err74];
+                } else {
+                  vErrors.push(err74);
+                }
+                errors++;
+              }
+            }
+            if (data38.protocol !== void 0) {
+              if (typeof data38.protocol !== "string") {
+                const err75 = { instancePath: instancePath + "/request/wire/protocol", schemaPath: "#/properties/request/properties/wire/properties/protocol/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err75];
+                } else {
+                  vErrors.push(err75);
+                }
+                errors++;
+              }
+            }
+            if (data38.version !== void 0) {
+              if (typeof data38.version !== "string") {
+                const err76 = { instancePath: instancePath + "/request/wire/version", schemaPath: "#/properties/request/properties/wire/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err76];
+                } else {
+                  vErrors.push(err76);
+                }
+                errors++;
+              }
+            }
+            if (data38.request_id !== void 0) {
+              if (typeof data38.request_id !== "string") {
+                const err77 = { instancePath: instancePath + "/request/wire/request_id", schemaPath: "#/properties/request/properties/wire/properties/request_id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err77];
+                } else {
+                  vErrors.push(err77);
+                }
+                errors++;
+              }
+            }
+            if (data38.chain_hash !== void 0) {
+              if (typeof data38.chain_hash !== "string") {
+                const err78 = { instancePath: instancePath + "/request/wire/chain_hash", schemaPath: "#/properties/request/properties/wire/properties/chain_hash/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err78];
+                } else {
+                  vErrors.push(err78);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err79 = { instancePath: instancePath + "/request/wire", schemaPath: "#/properties/request/properties/wire/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err79];
+            } else {
+              vErrors.push(err79);
+            }
+            errors++;
+          }
+        }
+      } else {
+        const err80 = { instancePath: instancePath + "/request", schemaPath: "#/properties/request/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+        if (vErrors === null) {
+          vErrors = [err80];
+        } else {
+          vErrors.push(err80);
+        }
+        errors++;
+      }
+    }
+    if (data.policy !== void 0) {
+      let data43 = data.policy;
+      if (data43 && typeof data43 == "object" && !Array.isArray(data43)) {
+        if (data43.matrix === void 0) {
+          const err81 = { instancePath: instancePath + "/policy", schemaPath: "#/properties/policy/required", keyword: "required", params: { missingProperty: "matrix" }, message: "must have required property 'matrix'" };
+          if (vErrors === null) {
+            vErrors = [err81];
+          } else {
+            vErrors.push(err81);
+          }
+          errors++;
+        }
+        if (data43.binding === void 0) {
+          const err82 = { instancePath: instancePath + "/policy", schemaPath: "#/properties/policy/required", keyword: "required", params: { missingProperty: "binding" }, message: "must have required property 'binding'" };
+          if (vErrors === null) {
+            vErrors = [err82];
+          } else {
+            vErrors.push(err82);
+          }
+          errors++;
+        }
+        for (const key11 in data43) {
+          if (!(key11 === "matrix" || key11 === "binding")) {
+            const err83 = { instancePath: instancePath + "/policy", schemaPath: "#/properties/policy/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key11 }, message: "must NOT have additional properties" };
+            if (vErrors === null) {
+              vErrors = [err83];
+            } else {
+              vErrors.push(err83);
+            }
+            errors++;
+          }
+        }
+        if (data43.matrix !== void 0) {
+          let data44 = data43.matrix;
+          if (data44 && typeof data44 == "object" && !Array.isArray(data44)) {
+            if (data44.id === void 0) {
+              const err84 = { instancePath: instancePath + "/policy/matrix", schemaPath: "#/$defs/versioned/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+              if (vErrors === null) {
+                vErrors = [err84];
+              } else {
+                vErrors.push(err84);
+              }
+              errors++;
+            }
+            if (data44.version === void 0) {
+              const err85 = { instancePath: instancePath + "/policy/matrix", schemaPath: "#/$defs/versioned/required", keyword: "required", params: { missingProperty: "version" }, message: "must have required property 'version'" };
+              if (vErrors === null) {
+                vErrors = [err85];
+              } else {
+                vErrors.push(err85);
+              }
+              errors++;
+            }
+            for (const key12 in data44) {
+              if (!(key12 === "id" || key12 === "version")) {
+                const err86 = { instancePath: instancePath + "/policy/matrix", schemaPath: "#/$defs/versioned/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key12 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err86];
+                } else {
+                  vErrors.push(err86);
+                }
+                errors++;
+              }
+            }
+            if (data44.id !== void 0) {
+              if (typeof data44.id !== "string") {
+                const err87 = { instancePath: instancePath + "/policy/matrix/id", schemaPath: "#/$defs/versioned/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err87];
+                } else {
+                  vErrors.push(err87);
+                }
+                errors++;
+              }
+            }
+            if (data44.version !== void 0) {
+              if (typeof data44.version !== "string") {
+                const err88 = { instancePath: instancePath + "/policy/matrix/version", schemaPath: "#/$defs/versioned/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err88];
+                } else {
+                  vErrors.push(err88);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err89 = { instancePath: instancePath + "/policy/matrix", schemaPath: "#/$defs/versioned/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err89];
+            } else {
+              vErrors.push(err89);
+            }
+            errors++;
+          }
+        }
+        if (data43.binding !== void 0) {
+          let data47 = data43.binding;
+          if (data47 && typeof data47 == "object" && !Array.isArray(data47)) {
+            if (data47.id === void 0) {
+              const err90 = { instancePath: instancePath + "/policy/binding", schemaPath: "#/$defs/versioned/required", keyword: "required", params: { missingProperty: "id" }, message: "must have required property 'id'" };
+              if (vErrors === null) {
+                vErrors = [err90];
+              } else {
+                vErrors.push(err90);
+              }
+              errors++;
+            }
+            if (data47.version === void 0) {
+              const err91 = { instancePath: instancePath + "/policy/binding", schemaPath: "#/$defs/versioned/required", keyword: "required", params: { missingProperty: "version" }, message: "must have required property 'version'" };
+              if (vErrors === null) {
+                vErrors = [err91];
+              } else {
+                vErrors.push(err91);
+              }
+              errors++;
+            }
+            for (const key13 in data47) {
+              if (!(key13 === "id" || key13 === "version")) {
+                const err92 = { instancePath: instancePath + "/policy/binding", schemaPath: "#/$defs/versioned/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key13 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err92];
+                } else {
+                  vErrors.push(err92);
+                }
+                errors++;
+              }
+            }
+            if (data47.id !== void 0) {
+              if (typeof data47.id !== "string") {
+                const err93 = { instancePath: instancePath + "/policy/binding/id", schemaPath: "#/$defs/versioned/properties/id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err93];
+                } else {
+                  vErrors.push(err93);
+                }
+                errors++;
+              }
+            }
+            if (data47.version !== void 0) {
+              if (typeof data47.version !== "string") {
+                const err94 = { instancePath: instancePath + "/policy/binding/version", schemaPath: "#/$defs/versioned/properties/version/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err94];
+                } else {
+                  vErrors.push(err94);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err95 = { instancePath: instancePath + "/policy/binding", schemaPath: "#/$defs/versioned/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err95];
+            } else {
+              vErrors.push(err95);
+            }
+            errors++;
+          }
+        }
+      } else {
+        const err96 = { instancePath: instancePath + "/policy", schemaPath: "#/properties/policy/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+        if (vErrors === null) {
+          vErrors = [err96];
+        } else {
+          vErrors.push(err96);
+        }
+        errors++;
+      }
+    }
+    if (data.decision !== void 0) {
+      let data50 = data.decision;
+      if (data50 && typeof data50 == "object" && !Array.isArray(data50)) {
+        if (data50.outcome === void 0) {
+          const err97 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/required", keyword: "required", params: { missingProperty: "outcome" }, message: "must have required property 'outcome'" };
+          if (vErrors === null) {
+            vErrors = [err97];
+          } else {
+            vErrors.push(err97);
+          }
+          errors++;
+        }
+        if (data50.band === void 0) {
+          const err98 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/required", keyword: "required", params: { missingProperty: "band" }, message: "must have required property 'band'" };
+          if (vErrors === null) {
+            vErrors = [err98];
+          } else {
+            vErrors.push(err98);
+          }
+          errors++;
+        }
+        if (data50.placements === void 0) {
+          const err99 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/required", keyword: "required", params: { missingProperty: "placements" }, message: "must have required property 'placements'" };
+          if (vErrors === null) {
+            vErrors = [err99];
+          } else {
+            vErrors.push(err99);
+          }
+          errors++;
+        }
+        if (data50.reasons === void 0) {
+          const err100 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/required", keyword: "required", params: { missingProperty: "reasons" }, message: "must have required property 'reasons'" };
+          if (vErrors === null) {
+            vErrors = [err100];
+          } else {
+            vErrors.push(err100);
+          }
+          errors++;
+        }
+        for (const key14 in data50) {
+          if (!(key14 === "outcome" || key14 === "band" || key14 === "approver_role" || key14 === "placements" || key14 === "reasons")) {
+            const err101 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key14 }, message: "must NOT have additional properties" };
+            if (vErrors === null) {
+              vErrors = [err101];
+            } else {
+              vErrors.push(err101);
+            }
+            errors++;
+          }
+        }
+        if (data50.outcome !== void 0) {
+          let data51 = data50.outcome;
+          if (!(data51 === "allow" || data51 === "review" || data51 === "escalate" || data51 === "refuse" || data51 === "unplaceable")) {
+            const err102 = { instancePath: instancePath + "/decision/outcome", schemaPath: "#/$defs/outcome/enum", keyword: "enum", params: { allowedValues: schema208.enum }, message: "must be equal to one of the allowed values" };
+            if (vErrors === null) {
+              vErrors = [err102];
+            } else {
+              vErrors.push(err102);
+            }
+            errors++;
+          }
+        }
+        if (data50.band !== void 0) {
+          let data52 = data50.band;
+          if (!(data52 === "A" || data52 === "B" || data52 === "C" || data52 === "non-delegable" || data52 === null)) {
+            const err103 = { instancePath: instancePath + "/decision/band", schemaPath: "#/$defs/band/enum", keyword: "enum", params: { allowedValues: schema209.enum }, message: "must be equal to one of the allowed values" };
+            if (vErrors === null) {
+              vErrors = [err103];
+            } else {
+              vErrors.push(err103);
+            }
+            errors++;
+          }
+        }
+        if (data50.approver_role !== void 0) {
+          if (typeof data50.approver_role !== "string") {
+            const err104 = { instancePath: instancePath + "/decision/approver_role", schemaPath: "#/properties/decision/properties/approver_role/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+            if (vErrors === null) {
+              vErrors = [err104];
+            } else {
+              vErrors.push(err104);
+            }
+            errors++;
+          }
+        }
+        if (data50.placements !== void 0) {
+          let data54 = data50.placements;
+          if (Array.isArray(data54)) {
+            const len1 = data54.length;
+            for (let i1 = 0; i1 < len1; i1++) {
+              let data55 = data54[i1];
+              if (data55 && typeof data55 == "object" && !Array.isArray(data55)) {
+                if (data55.row === void 0) {
+                  const err105 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "row" }, message: "must have required property 'row'" };
+                  if (vErrors === null) {
+                    vErrors = [err105];
+                  } else {
+                    vErrors.push(err105);
+                  }
+                  errors++;
+                }
+                if (data55.capability === void 0) {
+                  const err106 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "capability" }, message: "must have required property 'capability'" };
+                  if (vErrors === null) {
+                    vErrors = [err106];
+                  } else {
+                    vErrors.push(err106);
+                  }
+                  errors++;
+                }
+                if (data55.entry === void 0) {
+                  const err107 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "entry" }, message: "must have required property 'entry'" };
+                  if (vErrors === null) {
+                    vErrors = [err107];
+                  } else {
+                    vErrors.push(err107);
+                  }
+                  errors++;
+                }
+                if (data55.band === void 0) {
+                  const err108 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "band" }, message: "must have required property 'band'" };
+                  if (vErrors === null) {
+                    vErrors = [err108];
+                  } else {
+                    vErrors.push(err108);
+                  }
+                  errors++;
+                }
+                if (data55.outcome === void 0) {
+                  const err109 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "outcome" }, message: "must have required property 'outcome'" };
+                  if (vErrors === null) {
+                    vErrors = [err109];
+                  } else {
+                    vErrors.push(err109);
+                  }
+                  errors++;
+                }
+                if (data55.facts === void 0) {
+                  const err110 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/required", keyword: "required", params: { missingProperty: "facts" }, message: "must have required property 'facts'" };
+                  if (vErrors === null) {
+                    vErrors = [err110];
+                  } else {
+                    vErrors.push(err110);
+                  }
+                  errors++;
+                }
+                for (const key15 in data55) {
+                  if (!(key15 === "row" || key15 === "capability" || key15 === "entry" || key15 === "band" || key15 === "outcome" || key15 === "approver_role" || key15 === "facts")) {
+                    const err111 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key15 }, message: "must NOT have additional properties" };
+                    if (vErrors === null) {
+                      vErrors = [err111];
+                    } else {
+                      vErrors.push(err111);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.row !== void 0) {
+                  if (typeof data55.row !== "string") {
+                    const err112 = { instancePath: instancePath + "/decision/placements/" + i1 + "/row", schemaPath: "#/properties/decision/properties/placements/items/properties/row/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err112];
+                    } else {
+                      vErrors.push(err112);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.capability !== void 0) {
+                  if (typeof data55.capability !== "string") {
+                    const err113 = { instancePath: instancePath + "/decision/placements/" + i1 + "/capability", schemaPath: "#/properties/decision/properties/placements/items/properties/capability/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err113];
+                    } else {
+                      vErrors.push(err113);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.entry !== void 0) {
+                  if (typeof data55.entry !== "string") {
+                    const err114 = { instancePath: instancePath + "/decision/placements/" + i1 + "/entry", schemaPath: "#/properties/decision/properties/placements/items/properties/entry/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err114];
+                    } else {
+                      vErrors.push(err114);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.band !== void 0) {
+                  let data59 = data55.band;
+                  if (!(data59 === "A" || data59 === "B" || data59 === "C" || data59 === "non-delegable" || data59 === null)) {
+                    const err115 = { instancePath: instancePath + "/decision/placements/" + i1 + "/band", schemaPath: "#/$defs/band/enum", keyword: "enum", params: { allowedValues: schema209.enum }, message: "must be equal to one of the allowed values" };
+                    if (vErrors === null) {
+                      vErrors = [err115];
+                    } else {
+                      vErrors.push(err115);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.outcome !== void 0) {
+                  let data60 = data55.outcome;
+                  if (!(data60 === "allow" || data60 === "review" || data60 === "escalate" || data60 === "refuse" || data60 === "unplaceable")) {
+                    const err116 = { instancePath: instancePath + "/decision/placements/" + i1 + "/outcome", schemaPath: "#/$defs/outcome/enum", keyword: "enum", params: { allowedValues: schema208.enum }, message: "must be equal to one of the allowed values" };
+                    if (vErrors === null) {
+                      vErrors = [err116];
+                    } else {
+                      vErrors.push(err116);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.approver_role !== void 0) {
+                  if (typeof data55.approver_role !== "string") {
+                    const err117 = { instancePath: instancePath + "/decision/placements/" + i1 + "/approver_role", schemaPath: "#/properties/decision/properties/placements/items/properties/approver_role/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err117];
+                    } else {
+                      vErrors.push(err117);
+                    }
+                    errors++;
+                  }
+                }
+                if (data55.facts !== void 0) {
+                  let data62 = data55.facts;
+                  if (data62 && typeof data62 == "object" && !Array.isArray(data62)) {
+                    for (const key16 in data62) {
+                      let data63 = data62[key16];
+                      const _errs148 = errors;
+                      let valid39 = false;
+                      let passing0 = null;
+                      const _errs149 = errors;
+                      if (data63 && typeof data63 == "object" && !Array.isArray(data63)) {
+                        if (data63.value === void 0) {
+                          const err118 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/0/required", keyword: "required", params: { missingProperty: "value" }, message: "must have required property 'value'" };
+                          if (vErrors === null) {
+                            vErrors = [err118];
+                          } else {
+                            vErrors.push(err118);
+                          }
+                          errors++;
+                        }
+                        for (const key17 in data63) {
+                          if (!(key17 === "value")) {
+                            const err119 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/0/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key17 }, message: "must NOT have additional properties" };
+                            if (vErrors === null) {
+                              vErrors = [err119];
+                            } else {
+                              vErrors.push(err119);
+                            }
+                            errors++;
+                          }
+                        }
+                      } else {
+                        const err120 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/0/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                        if (vErrors === null) {
+                          vErrors = [err120];
+                        } else {
+                          vErrors.push(err120);
+                        }
+                        errors++;
+                      }
+                      var _valid2 = _errs149 === errors;
+                      if (_valid2) {
+                        valid39 = true;
+                        passing0 = 0;
+                        var props2 = true;
+                      }
+                      const _errs152 = errors;
+                      if (data63 && typeof data63 == "object" && !Array.isArray(data63)) {
+                        if (data63.digest === void 0) {
+                          const err121 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/1/required", keyword: "required", params: { missingProperty: "digest" }, message: "must have required property 'digest'" };
+                          if (vErrors === null) {
+                            vErrors = [err121];
+                          } else {
+                            vErrors.push(err121);
+                          }
+                          errors++;
+                        }
+                        for (const key18 in data63) {
+                          if (!(key18 === "digest")) {
+                            const err122 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/1/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key18 }, message: "must NOT have additional properties" };
+                            if (vErrors === null) {
+                              vErrors = [err122];
+                            } else {
+                              vErrors.push(err122);
+                            }
+                            errors++;
+                          }
+                        }
+                        if (data63.digest !== void 0) {
+                          let data64 = data63.digest;
+                          if (typeof data64 === "string") {
+                            if (!pattern112.test(data64)) {
+                              const err123 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1") + "/digest", schemaPath: "#/$defs/recordedFact/oneOf/1/properties/digest/pattern", keyword: "pattern", params: { pattern: "^hmac-sha256:[0-9a-f]{64}$" }, message: 'must match pattern "^hmac-sha256:[0-9a-f]{64}$"' };
+                              if (vErrors === null) {
+                                vErrors = [err123];
+                              } else {
+                                vErrors.push(err123);
+                              }
+                              errors++;
+                            }
+                          } else {
+                            const err124 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1") + "/digest", schemaPath: "#/$defs/recordedFact/oneOf/1/properties/digest/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                            if (vErrors === null) {
+                              vErrors = [err124];
+                            } else {
+                              vErrors.push(err124);
+                            }
+                            errors++;
+                          }
+                        }
+                      } else {
+                        const err125 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/1/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                        if (vErrors === null) {
+                          vErrors = [err125];
+                        } else {
+                          vErrors.push(err125);
+                        }
+                        errors++;
+                      }
+                      var _valid2 = _errs152 === errors;
+                      if (_valid2 && valid39) {
+                        valid39 = false;
+                        passing0 = [passing0, 1];
+                      } else {
+                        if (_valid2) {
+                          valid39 = true;
+                          passing0 = 1;
+                          if (props2 !== true) {
+                            props2 = true;
+                          }
+                        }
+                        const _errs157 = errors;
+                        if (data63 && typeof data63 == "object" && !Array.isArray(data63)) {
+                          if (data63.omitted === void 0) {
+                            const err126 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/2/required", keyword: "required", params: { missingProperty: "omitted" }, message: "must have required property 'omitted'" };
+                            if (vErrors === null) {
+                              vErrors = [err126];
+                            } else {
+                              vErrors.push(err126);
+                            }
+                            errors++;
+                          }
+                          for (const key19 in data63) {
+                            if (!(key19 === "omitted")) {
+                              const err127 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/2/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key19 }, message: "must NOT have additional properties" };
+                              if (vErrors === null) {
+                                vErrors = [err127];
+                              } else {
+                                vErrors.push(err127);
+                              }
+                              errors++;
+                            }
+                          }
+                          if (data63.omitted !== void 0) {
+                            if (true !== data63.omitted) {
+                              const err128 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1") + "/omitted", schemaPath: "#/$defs/recordedFact/oneOf/2/properties/omitted/const", keyword: "const", params: { allowedValue: true }, message: "must be equal to constant" };
+                              if (vErrors === null) {
+                                vErrors = [err128];
+                              } else {
+                                vErrors.push(err128);
+                              }
+                              errors++;
+                            }
+                          }
+                        } else {
+                          const err129 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf/2/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                          if (vErrors === null) {
+                            vErrors = [err129];
+                          } else {
+                            vErrors.push(err129);
+                          }
+                          errors++;
+                        }
+                        var _valid2 = _errs157 === errors;
+                        if (_valid2 && valid39) {
+                          valid39 = false;
+                          passing0 = [passing0, 2];
+                        } else {
+                          if (_valid2) {
+                            valid39 = true;
+                            passing0 = 2;
+                            if (props2 !== true) {
+                              props2 = true;
+                            }
+                          }
+                        }
+                      }
+                      if (!valid39) {
+                        const err130 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts/" + key16.replace(/~/g, "~0").replace(/\//g, "~1"), schemaPath: "#/$defs/recordedFact/oneOf", keyword: "oneOf", params: { passingSchemas: passing0 }, message: "must match exactly one schema in oneOf" };
+                        if (vErrors === null) {
+                          vErrors = [err130];
+                        } else {
+                          vErrors.push(err130);
+                        }
+                        errors++;
+                      } else {
+                        errors = _errs148;
+                        if (vErrors !== null) {
+                          if (_errs148) {
+                            vErrors.length = _errs148;
+                          } else {
+                            vErrors = null;
+                          }
+                        }
+                      }
+                    }
+                  } else {
+                    const err131 = { instancePath: instancePath + "/decision/placements/" + i1 + "/facts", schemaPath: "#/properties/decision/properties/placements/items/properties/facts/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                    if (vErrors === null) {
+                      vErrors = [err131];
+                    } else {
+                      vErrors.push(err131);
+                    }
+                    errors++;
+                  }
+                }
+              } else {
+                const err132 = { instancePath: instancePath + "/decision/placements/" + i1, schemaPath: "#/properties/decision/properties/placements/items/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                if (vErrors === null) {
+                  vErrors = [err132];
+                } else {
+                  vErrors.push(err132);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err133 = { instancePath: instancePath + "/decision/placements", schemaPath: "#/properties/decision/properties/placements/type", keyword: "type", params: { type: "array" }, message: "must be array" };
+            if (vErrors === null) {
+              vErrors = [err133];
+            } else {
+              vErrors.push(err133);
+            }
+            errors++;
+          }
+        }
+        if (data50.reasons !== void 0) {
+          let data66 = data50.reasons;
+          if (Array.isArray(data66)) {
+            const len2 = data66.length;
+            for (let i2 = 0; i2 < len2; i2++) {
+              let data67 = data66[i2];
+              if (data67 && typeof data67 == "object" && !Array.isArray(data67)) {
+                if (data67.code === void 0) {
+                  const err134 = { instancePath: instancePath + "/decision/reasons/" + i2, schemaPath: "#/$defs/reason/required", keyword: "required", params: { missingProperty: "code" }, message: "must have required property 'code'" };
+                  if (vErrors === null) {
+                    vErrors = [err134];
+                  } else {
+                    vErrors.push(err134);
+                  }
+                  errors++;
+                }
+                for (const key20 in data67) {
+                  if (!(key20 === "code" || key20 === "detail" || key20 === "row")) {
+                    const err135 = { instancePath: instancePath + "/decision/reasons/" + i2, schemaPath: "#/$defs/reason/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key20 }, message: "must NOT have additional properties" };
+                    if (vErrors === null) {
+                      vErrors = [err135];
+                    } else {
+                      vErrors.push(err135);
+                    }
+                    errors++;
+                  }
+                }
+                if (data67.code !== void 0) {
+                  if (typeof data67.code !== "string") {
+                    const err136 = { instancePath: instancePath + "/decision/reasons/" + i2 + "/code", schemaPath: "#/$defs/reason/properties/code/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err136];
+                    } else {
+                      vErrors.push(err136);
+                    }
+                    errors++;
+                  }
+                }
+                if (data67.detail !== void 0) {
+                  if (typeof data67.detail !== "string") {
+                    const err137 = { instancePath: instancePath + "/decision/reasons/" + i2 + "/detail", schemaPath: "#/$defs/reason/properties/detail/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err137];
+                    } else {
+                      vErrors.push(err137);
+                    }
+                    errors++;
+                  }
+                }
+                if (data67.row !== void 0) {
+                  if (typeof data67.row !== "string") {
+                    const err138 = { instancePath: instancePath + "/decision/reasons/" + i2 + "/row", schemaPath: "#/$defs/reason/properties/row/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                    if (vErrors === null) {
+                      vErrors = [err138];
+                    } else {
+                      vErrors.push(err138);
+                    }
+                    errors++;
+                  }
+                }
+              } else {
+                const err139 = { instancePath: instancePath + "/decision/reasons/" + i2, schemaPath: "#/$defs/reason/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+                if (vErrors === null) {
+                  vErrors = [err139];
+                } else {
+                  vErrors.push(err139);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err140 = { instancePath: instancePath + "/decision/reasons", schemaPath: "#/properties/decision/properties/reasons/type", keyword: "type", params: { type: "array" }, message: "must be array" };
+            if (vErrors === null) {
+              vErrors = [err140];
+            } else {
+              vErrors.push(err140);
+            }
+            errors++;
+          }
+        }
+      } else {
+        const err141 = { instancePath: instancePath + "/decision", schemaPath: "#/properties/decision/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+        if (vErrors === null) {
+          vErrors = [err141];
+        } else {
+          vErrors.push(err141);
+        }
+        errors++;
+      }
+    }
+    if (data.reservations !== void 0) {
+      let data71 = data.reservations;
+      if (Array.isArray(data71)) {
+        const len3 = data71.length;
+        for (let i3 = 0; i3 < len3; i3++) {
+          let data72 = data71[i3];
+          if (data72 && typeof data72 == "object" && !Array.isArray(data72)) {
+            if (data72.cap === void 0) {
+              const err142 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/required", keyword: "required", params: { missingProperty: "cap" }, message: "must have required property 'cap'" };
+              if (vErrors === null) {
+                vErrors = [err142];
+              } else {
+                vErrors.push(err142);
+              }
+              errors++;
+            }
+            if (data72.row === void 0) {
+              const err143 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/required", keyword: "required", params: { missingProperty: "row" }, message: "must have required property 'row'" };
+              if (vErrors === null) {
+                vErrors = [err143];
+              } else {
+                vErrors.push(err143);
+              }
+              errors++;
+            }
+            if (data72.group === void 0) {
+              const err144 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/required", keyword: "required", params: { missingProperty: "group" }, message: "must have required property 'group'" };
+              if (vErrors === null) {
+                vErrors = [err144];
+              } else {
+                vErrors.push(err144);
+              }
+              errors++;
+            }
+            if (data72.count === void 0) {
+              const err145 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/required", keyword: "required", params: { missingProperty: "count" }, message: "must have required property 'count'" };
+              if (vErrors === null) {
+                vErrors = [err145];
+              } else {
+                vErrors.push(err145);
+              }
+              errors++;
+            }
+            for (const key21 in data72) {
+              if (!(key21 === "cap" || key21 === "row" || key21 === "group" || key21 === "amount" || key21 === "count")) {
+                const err146 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key21 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err146];
+                } else {
+                  vErrors.push(err146);
+                }
+                errors++;
+              }
+            }
+            if (data72.cap !== void 0) {
+              if (typeof data72.cap !== "string") {
+                const err147 = { instancePath: instancePath + "/reservations/" + i3 + "/cap", schemaPath: "#/properties/reservations/items/properties/cap/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err147];
+                } else {
+                  vErrors.push(err147);
+                }
+                errors++;
+              }
+            }
+            if (data72.row !== void 0) {
+              if (typeof data72.row !== "string") {
+                const err148 = { instancePath: instancePath + "/reservations/" + i3 + "/row", schemaPath: "#/properties/reservations/items/properties/row/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err148];
+                } else {
+                  vErrors.push(err148);
+                }
+                errors++;
+              }
+            }
+            if (data72.group !== void 0) {
+              if (typeof data72.group !== "string") {
+                const err149 = { instancePath: instancePath + "/reservations/" + i3 + "/group", schemaPath: "#/properties/reservations/items/properties/group/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err149];
+                } else {
+                  vErrors.push(err149);
+                }
+                errors++;
+              }
+            }
+            if (data72.amount !== void 0) {
+              let data76 = data72.amount;
+              if (typeof data76 === "string") {
+                if (!pattern27.test(data76)) {
+                  const err150 = { instancePath: instancePath + "/reservations/" + i3 + "/amount", schemaPath: "#/properties/reservations/items/properties/amount/pattern", keyword: "pattern", params: { pattern: "^(0|[1-9]\\d*)(\\.\\d+)?$" }, message: 'must match pattern "^(0|[1-9]\\d*)(\\.\\d+)?$"' };
+                  if (vErrors === null) {
+                    vErrors = [err150];
+                  } else {
+                    vErrors.push(err150);
+                  }
+                  errors++;
+                }
+              } else {
+                const err151 = { instancePath: instancePath + "/reservations/" + i3 + "/amount", schemaPath: "#/properties/reservations/items/properties/amount/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err151];
+                } else {
+                  vErrors.push(err151);
+                }
+                errors++;
+              }
+            }
+            if (data72.count !== void 0) {
+              if (1 !== data72.count) {
+                const err152 = { instancePath: instancePath + "/reservations/" + i3 + "/count", schemaPath: "#/properties/reservations/items/properties/count/const", keyword: "const", params: { allowedValue: 1 }, message: "must be equal to constant" };
+                if (vErrors === null) {
+                  vErrors = [err152];
+                } else {
+                  vErrors.push(err152);
+                }
+                errors++;
+              }
+            }
+          } else {
+            const err153 = { instancePath: instancePath + "/reservations/" + i3, schemaPath: "#/properties/reservations/items/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err153];
+            } else {
+              vErrors.push(err153);
+            }
+            errors++;
+          }
+        }
+      } else {
+        const err154 = { instancePath: instancePath + "/reservations", schemaPath: "#/properties/reservations/type", keyword: "type", params: { type: "array" }, message: "must be array" };
+        if (vErrors === null) {
+          vErrors = [err154];
+        } else {
+          vErrors.push(err154);
+        }
+        errors++;
+      }
+    }
+    if (data.resolution !== void 0) {
+      let data78 = data.resolution;
+      if (data78 && typeof data78 == "object" && !Array.isArray(data78)) {
+        if (data78.ts === void 0) {
+          const err155 = { instancePath: instancePath + "/resolution", schemaPath: "#/properties/resolution/required", keyword: "required", params: { missingProperty: "ts" }, message: "must have required property 'ts'" };
+          if (vErrors === null) {
+            vErrors = [err155];
+          } else {
+            vErrors.push(err155);
+          }
+          errors++;
+        }
+        if (data78.result === void 0) {
+          const err156 = { instancePath: instancePath + "/resolution", schemaPath: "#/properties/resolution/required", keyword: "required", params: { missingProperty: "result" }, message: "must have required property 'result'" };
+          if (vErrors === null) {
+            vErrors = [err156];
+          } else {
+            vErrors.push(err156);
+          }
+          errors++;
+        }
+        for (const key22 in data78) {
+          if (!(key22 === "ts" || key22 === "result" || key22 === "approval")) {
+            const err157 = { instancePath: instancePath + "/resolution", schemaPath: "#/properties/resolution/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key22 }, message: "must NOT have additional properties" };
+            if (vErrors === null) {
+              vErrors = [err157];
+            } else {
+              vErrors.push(err157);
+            }
+            errors++;
+          }
+        }
+        if (data78.ts !== void 0) {
+          let data79 = data78.ts;
+          if (typeof data79 === "string") {
+            if (!formats0.validate(data79)) {
+              const err158 = { instancePath: instancePath + "/resolution/ts", schemaPath: "#/properties/resolution/properties/ts/format", keyword: "format", params: { format: "date-time" }, message: 'must match format "date-time"' };
+              if (vErrors === null) {
+                vErrors = [err158];
+              } else {
+                vErrors.push(err158);
+              }
+              errors++;
+            }
+          } else {
+            const err159 = { instancePath: instancePath + "/resolution/ts", schemaPath: "#/properties/resolution/properties/ts/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+            if (vErrors === null) {
+              vErrors = [err159];
+            } else {
+              vErrors.push(err159);
+            }
+            errors++;
+          }
+        }
+        if (data78.result !== void 0) {
+          let data80 = data78.result;
+          if (!(data80 === "executed" || data80 === "rejected" || data80 === "expired" || data80 === "withdrawn" || data80 === "not-executed")) {
+            const err160 = { instancePath: instancePath + "/resolution/result", schemaPath: "#/properties/resolution/properties/result/enum", keyword: "enum", params: { allowedValues: schema205.properties.resolution.properties.result.enum }, message: "must be equal to one of the allowed values" };
+            if (vErrors === null) {
+              vErrors = [err160];
+            } else {
+              vErrors.push(err160);
+            }
+            errors++;
+          }
+        }
+        if (data78.approval !== void 0) {
+          let data81 = data78.approval;
+          if (data81 && typeof data81 == "object" && !Array.isArray(data81)) {
+            if (data81.approver_role === void 0) {
+              const err161 = { instancePath: instancePath + "/resolution/approval", schemaPath: "#/properties/resolution/properties/approval/required", keyword: "required", params: { missingProperty: "approver_role" }, message: "must have required property 'approver_role'" };
+              if (vErrors === null) {
+                vErrors = [err161];
+              } else {
+                vErrors.push(err161);
+              }
+              errors++;
+            }
+            if (data81.record === void 0) {
+              const err162 = { instancePath: instancePath + "/resolution/approval", schemaPath: "#/properties/resolution/properties/approval/required", keyword: "required", params: { missingProperty: "record" }, message: "must have required property 'record'" };
+              if (vErrors === null) {
+                vErrors = [err162];
+              } else {
+                vErrors.push(err162);
+              }
+              errors++;
+            }
+            for (const key23 in data81) {
+              if (!(key23 === "approver_role" || key23 === "approver_id" || key23 === "record" || key23 === "latency_ms")) {
+                const err163 = { instancePath: instancePath + "/resolution/approval", schemaPath: "#/properties/resolution/properties/approval/additionalProperties", keyword: "additionalProperties", params: { additionalProperty: key23 }, message: "must NOT have additional properties" };
+                if (vErrors === null) {
+                  vErrors = [err163];
+                } else {
+                  vErrors.push(err163);
+                }
+                errors++;
+              }
+            }
+            if (data81.approver_role !== void 0) {
+              if (typeof data81.approver_role !== "string") {
+                const err164 = { instancePath: instancePath + "/resolution/approval/approver_role", schemaPath: "#/properties/resolution/properties/approval/properties/approver_role/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err164];
+                } else {
+                  vErrors.push(err164);
+                }
+                errors++;
+              }
+            }
+            if (data81.approver_id !== void 0) {
+              if (typeof data81.approver_id !== "string") {
+                const err165 = { instancePath: instancePath + "/resolution/approval/approver_id", schemaPath: "#/properties/resolution/properties/approval/properties/approver_id/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err165];
+                } else {
+                  vErrors.push(err165);
+                }
+                errors++;
+              }
+            }
+            if (data81.record !== void 0) {
+              if (typeof data81.record !== "string") {
+                const err166 = { instancePath: instancePath + "/resolution/approval/record", schemaPath: "#/properties/resolution/properties/approval/properties/record/type", keyword: "type", params: { type: "string" }, message: "must be string" };
+                if (vErrors === null) {
+                  vErrors = [err166];
+                } else {
+                  vErrors.push(err166);
+                }
+                errors++;
+              }
+            }
+            if (data81.latency_ms !== void 0) {
+              let data85 = data81.latency_ms;
+              if (!(typeof data85 == "number" && (!(data85 % 1) && !isNaN(data85)) && isFinite(data85))) {
+                const err167 = { instancePath: instancePath + "/resolution/approval/latency_ms", schemaPath: "#/properties/resolution/properties/approval/properties/latency_ms/type", keyword: "type", params: { type: "integer" }, message: "must be integer" };
+                if (vErrors === null) {
+                  vErrors = [err167];
+                } else {
+                  vErrors.push(err167);
+                }
+                errors++;
+              }
+              if (typeof data85 == "number" && isFinite(data85)) {
+                if (data85 < 0 || isNaN(data85)) {
+                  const err168 = { instancePath: instancePath + "/resolution/approval/latency_ms", schemaPath: "#/properties/resolution/properties/approval/properties/latency_ms/minimum", keyword: "minimum", params: { comparison: ">=", limit: 0 }, message: "must be >= 0" };
+                  if (vErrors === null) {
+                    vErrors = [err168];
+                  } else {
+                    vErrors.push(err168);
+                  }
+                  errors++;
+                }
+              }
+            }
+          } else {
+            const err169 = { instancePath: instancePath + "/resolution/approval", schemaPath: "#/properties/resolution/properties/approval/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+            if (vErrors === null) {
+              vErrors = [err169];
+            } else {
+              vErrors.push(err169);
+            }
+            errors++;
+          }
+        }
+      } else {
+        const err170 = { instancePath: instancePath + "/resolution", schemaPath: "#/properties/resolution/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+        if (vErrors === null) {
+          vErrors = [err170];
+        } else {
+          vErrors.push(err170);
+        }
+        errors++;
+      }
+    }
+  } else {
+    const err171 = { instancePath, schemaPath: "#/type", keyword: "type", params: { type: "object" }, message: "must be object" };
+    if (vErrors === null) {
+      vErrors = [err171];
+    } else {
+      vErrors.push(err171);
+    }
+    errors++;
+  }
+  validate99.errors = vErrors;
+  return errors === 0;
+}
+validate99.evaluated = { "props": true, "dynamicProps": false, "dynamicItems": false };
 export {
   validateBinding01,
+  validateDecision03,
   validateMatrix01,
   validateMatrix02
 };

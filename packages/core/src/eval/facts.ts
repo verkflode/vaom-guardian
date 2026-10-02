@@ -52,8 +52,13 @@ function toDecimal(v: unknown): string | null {
   return null;
 }
 
+/** Describe a value by its type only. Reasons end up in decision records, and a fact recorded as a
+ *  digest (a counterparty, a person) must not reappear there in clear through an error message. */
 function describe(v: unknown): string {
   if (v === undefined) return "(missing)";
-  const s = JSON.stringify(v);
-  return s.length > 40 ? `${s.slice(0, 40)}…` : s;
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "an array";
+  if (typeof v === "string") return `a string of ${v.length} characters`;
+  if (typeof v === "number") return Number.isInteger(v) ? "a whole number" : "a fractional number";
+  return `a ${typeof v}`;
 }

@@ -23,6 +23,7 @@ const schemas = {
   validateMatrix01: "schema/vaom-matrix-0.1.schema.json",
   validateMatrix02: "schema/vaom-matrix-0.2.schema.json",
   validateBinding01: "schema/vaom-binding.schema.json",
+  validateDecision03: "schema/vaom-decision-0.3.schema.json",
 };
 
 const ajv = new Ajv2020({
