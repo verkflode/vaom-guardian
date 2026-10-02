@@ -105,13 +105,13 @@ export function buildRecord(input: RecordInput): DecisionRecord {
     (r.code === "ceiling.exceeded" || r.code === "cap.breached") && r.row && amountsPrivate.has(r.row) ? { code: r.code, row: r.row } : r,
   );
 
-  const reservations = decision.reservations.map((res) => {
-    const row = policy.rowById.get(res.row);
-    const caps = [...(row?.authority?.cumulativeCaps ?? []), ...(row?.authority?.rateCaps ?? [])] as { id: string; groupBy?: string[] }[];
-    const groupBy = caps.find((c) => c.id === res.capId)?.groupBy ?? [];
-    const inClear = groupBy.every((g) => mode(g) === "value");
-    return { cap: res.capId, row: res.row, group: inClear ? res.groupKey : digest(res.groupKey), ...(res.amount !== undefined ? { amount: res.amount } : {}), count: 1 as const };
-  });
+  const reservations = decision.reservations.map((res) => ({
+    cap: res.capId,
+    row: res.row,
+    group: recordedGroup(policy, res.row, res.capId, res.groupKey, input.factKey),
+    ...(res.amount !== undefined ? { amount: res.amount } : {}),
+    count: 1 as const,
+  }));
 
   const touched = new Set(decision.placements.map((p) => p.capability));
   const scores = Object.fromEntries(
@@ -139,6 +139,21 @@ export function buildRecord(input: RecordInput): DecisionRecord {
   const problems = checkRecord(record);
   if (problems.length) throw new RecordError(`built record fails its schema: ${problems.map((f) => `${f.path} ${f.message}`).join("; ")}`);
   return record;
+}
+
+/**
+ * The form a cap group takes in records, and therefore in the cap ledger: the evaluator's raw key when
+ * every grouped fact is recorded in clear, otherwise its HMAC digest. One function for both, so a ledger
+ * rebuilt from records matches the live one exactly.
+ */
+export function recordedGroup(policy: Policy, row: string, capId: string, rawKey: string, factKey: Uint8Array | undefined): string {
+  const factDefs = policy.binding.facts as Record<string, { record?: string }>;
+  const a = policy.rowById.get(row)?.authority;
+  const caps = [...(a?.cumulativeCaps ?? []), ...(a?.rateCaps ?? [])] as { id: string; groupBy?: string[] }[];
+  const groupBy = caps.find((c) => c.id === capId)?.groupBy ?? [];
+  if (groupBy.every((g) => (factDefs[g]?.record ?? "value") === "value")) return rawKey;
+  if (!factKey || factKey.length === 0) throw new RecordError("a cap group must be recorded as a digest, but no fact key was given");
+  return `hmac-sha256:${hex(hmacSha256(factKey, utf8(rawKey)))}`;
 }
 
 /** Add the resolution. Refuses one that contradicts the decision: nothing refused or unplaceable executes,

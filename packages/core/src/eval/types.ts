@@ -42,8 +42,9 @@ export interface CapUsage {
 export interface EvalContext {
   /** Scores per capability the caller has scored. Absent means no score: the call routes at low. */
   scores?: Record<string, Score>;
-  /** Usage of a cap for one group key. null means the history can't be read, which counts as breached. */
-  capUsage(capId: string, groupKey: string): CapUsage | null;
+  /** Usage of one row's cap for one group key. null means the history can't be read, which counts as breached.
+   *  Cap ids are unique only within a row, so the row is part of the key. */
+  capUsage(row: string, capId: string, groupKey: string): CapUsage | null;
   /** Rows that currently have an open execution context in this session. */
   openContexts: ReadonlySet<string>;
 }

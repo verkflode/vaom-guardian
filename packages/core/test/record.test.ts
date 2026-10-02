@@ -16,7 +16,7 @@ const scores = {
 const ctx = (usage: Record<string, { total?: string; count: number }> = {}): EvalContext => ({
   scores,
   openContexts: new Set(),
-  capUsage: (c, g) => usage[`${c} ${g}`] ?? { total: "0", count: 0 },
+  capUsage: (_r, c, g) => usage[`${c} ${g}`] ?? { total: "0", count: 0 },
 });
 const approve = (amount: string, vendor = "V-7"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: "INV-1", vendor_id: vendor, amount, currency: "EUR" } });
 

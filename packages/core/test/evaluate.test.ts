@@ -18,7 +18,7 @@ function ctx(over: Partial<EvalContext> & { usage?: Record<string, CapUsage | nu
   return {
     scores: over.scores ?? approveScore(0.94),
     openContexts: over.openContexts ?? new Set(),
-    capUsage: (capId, groupKey) => (`${capId} ${groupKey}` in usage ? usage[`${capId} ${groupKey}`]! : { total: "0", count: 0 }),
+    capUsage: (_row, capId, groupKey) => (`${capId} ${groupKey}` in usage ? usage[`${capId} ${groupKey}`]! : { total: "0", count: 0 }),
   };
 }
 

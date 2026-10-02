@@ -199,7 +199,7 @@ function withReservations(p: Placement, r: Reservation[]): Placement {
 function capCheck(c: Validated, rowId: string, facts: Record<string, FactValue>, ctx: EvalContext, pending: Map<string, { total: string | null; count: number }>, reservations: Reservation[], reasons: Reason[]): "ok" | "breach" | "unplaceable" {
   const groupKey = JSON.stringify((c.groupBy ?? []).map((g: string) => facts[g]));
   const key = `${rowId}\u0000${c.id}\u0000${groupKey}`;
-  const usage = ctx.capUsage(c.id, groupKey);
+  const usage = ctx.capUsage(rowId, c.id, groupKey);
   let amount: string | undefined;
   if (c.total) {
     const v = facts[c.fact] as Money;
