@@ -7,6 +7,8 @@
 //   currency, no open context, conflicting approvers, a wire capability that disagrees with the binding)
 //   is unplaceable, never allowed.
 // - The strictest placement wins: across every matched binding entry and every batch item.
+// - Authority exists only inside a live execution context covering the call's row (and its task, if bound);
+//   a context's band ceiling narrows further.
 import { lintBinding } from "../lint/binding.ts";
 import { evalCondition } from "./conditions.ts";
 import { addDecimal, cmpDecimal } from "./decimal.ts";
@@ -141,7 +143,7 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   };
 
   if (a.kind === "preparatory") {
-    if (!(a.serves as string[]).some((s) => ctx.openContexts.has(s))) return fail("context.none", `no open execution context for a row ${row.id} serves (${a.serves.join(", ")})`);
+    if (!ctx.contexts.some((c) => (a.serves as string[]).some((s) => c.rows.includes(s)))) return fail("context.none", `no open execution context for a row ${row.id} serves (${a.serves.join(", ")})`);
     const hit = restrictionsHit(() => true);
     if (hit === "unplaceable") return fail("restriction.unevaluable", "a restriction couldn't be evaluated");
     if (hit) return { ...base, band: "non-delegable", outcome: "refuse", facts, reasons };
@@ -152,7 +154,15 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
     return withReservations({ ...base, band: null, outcome: "allow", facts, reasons: [...reasons, { code: "preparatory", row: row.id }] }, reservations);
   }
 
-  // Delegable: confidence picks among the bands the matrix authorises; everything after can only narrow.
+  // Delegable: authority exists only inside a live execution context covering this row, bound to this
+  // task if the call names one.
+  const covering = ctx.contexts.filter((c) => c.rows.includes(row.id));
+  if (covering.length === 0) return fail("context.none", `no open execution context covers row ${row.id}`);
+  const task = facts.task;
+  const applicable = task === undefined ? covering : covering.filter((c) => c.task === undefined || c.task === task);
+  if (applicable.length === 0) return fail("context.task-mismatch", `the call's task isn't the one its context is bound to`);
+
+  // Confidence picks among the bands the matrix authorises; everything after can only narrow.
   const score = ctx.scores?.[entry.capability];
   const sp = a.confidence?.scoringPolicy;
   let level: "high" | "medium" | "low" = "low";
@@ -183,6 +193,12 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
     const r = capCheck(c, row.id, facts, ctx, pending, reservations, reasons);
     if (r === "unplaceable") return fail("cap.currency", `cap ${c.id} is in a different currency from fact ${c.fact}`);
     if (r === "breach") band = stricter(band, c.onBreach);
+  }
+
+  // A context's band ceiling (attenuation for sub-agents) narrows further; the strictest applies.
+  for (const c of applicable) {
+    const ceiling = c.bandCeiling?.[row.id];
+    if (ceiling && RANK[ceiling] > RANK[band]) { band = ceiling; reasons.push({ code: "context.ceiling", detail: `context ${c.id} caps this row at ${ceiling}`, row: row.id }); }
   }
 
   if (band === "non-delegable") return { ...base, band, outcome: "refuse", facts, reasons };

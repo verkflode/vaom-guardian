@@ -12,3 +12,6 @@ export { sha256, hmacSha256, hex } from "./crypto/sha256.ts";
 export { CapLedger } from "./caps/ledger.ts";
 export { decide, type DecideInput } from "./decide.ts";
 export { recordedGroup } from "./record/record.ts";
+export { ContextRegistry, DEFAULT_CONTEXT_LIFETIME, type Context, type ContextSpec, type DeriveResult } from "./authority/contexts.ts";
+export { LeaseRegistry, type Health, type Lease } from "./authority/leases.ts";
+export type { LiveContext } from "./eval/types.ts";

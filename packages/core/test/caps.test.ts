@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CapLedger, compilePolicy, decide, evaluate, resolveRecord, type Call, type DecideInput, type DecisionRecord, type Policy } from "../src/index.ts";
+import { CapLedger, compilePolicy, ContextRegistry, decide, evaluate, resolveRecord, type Call, type DecideInput, type DecisionRecord, type Policy } from "../src/index.ts";
 import { binding, matrix02 } from "./helpers.ts";
 
 // invoice.approve has a per-vendor daily cap of EUR 5,000 (breach: review) and a ceiling of EUR 5,000.
@@ -13,9 +13,12 @@ const scores = { "erp:invoice.approve": { value: 0.95, policy: { id: "invoice-st
 const approve = (amount: string, vendor = "V-7", id = "INV"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: id, vendor_id: vendor, amount, currency: "EUR" } });
 
 let n = 0;
-const inputAt = (ts: string, extra: Partial<DecideInput> = {}): DecideInput => ({
-  id: `dec-${++n}`, ts, agent: { id: "ap-agent" }, session: { id: "s1" }, scores, factKey, ...extra,
-});
+// Each call runs under a context opened at its own time (contexts live 15 minutes; some tests span a day).
+const inputAt = (ts: string, extra: Partial<DecideInput> = {}): DecideInput => {
+  const contexts = new ContextRegistry(policy);
+  contexts.open({ id: `ctx-${n + 1}`, session: "s1", agent: { id: "ap-agent" }, rows: ["invoice.approve"] }, Date.parse(ts));
+  return { id: `dec-${++n}`, ts, agent: { id: "ap-agent" }, session: { id: "s1" }, scores, factKey, contexts, ...extra };
+};
 const fresh = () => { const l = new CapLedger(); l.load([]); return l; };
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -35,7 +38,7 @@ describe("the parallel-split attack", () => {
     const ledger = fresh();
     const naive = async (id: string) => {
       const ts = "2026-10-02T09:00:00Z", now = Date.parse(ts);
-      const d = evaluate(policy, approve("3000", "V-7", id), { scores, openContexts: new Set(), capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
+      const d = evaluate(policy, approve("3000", "V-7", id), { scores, contexts: [{ id: "c", rows: ["invoice.approve"] }], capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
       await tick(); // e.g. awaiting a database write
       ledger.reserve({ id, request: { ts }, reservations: d.reservations.map((r) => ({ cap: r.capId, row: r.row, group: r.groupKey, amount: r.amount!, count: 1 })) } as unknown as DecisionRecord);
       return d;

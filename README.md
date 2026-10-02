@@ -25,7 +25,9 @@ And it holds **decision records** (`vaom.decision/0.3`, schema in `schema/vaom-d
 
 The **cap ledger** and **`decide`** complete the decision path: `decide` evaluates a call against the ledger, builds its record and reserves its cap uses in one synchronous step, so parallel calls can't each see room under a cap only one of them fits in. Pending approvals count as used until resolved; rejected, expired and withdrawn ones are released. Until its history is loaded the ledger refuses to reserve, so no decision is made against unknown usage. A ledger rebuilt from decision records matches the live one exactly.
 
-The Guardian itself (the ACS wire, contexts and leases) is not built yet.
+**Execution contexts and leases** bound authority in time. A call has authority only inside a live context covering its row (bound to its task, if given); contexts expire, can't be reused, and revocation cascades. Sub-agent contexts can only narrow: fewer rows, stricter band ceilings, earlier expiry, within the matrix's depth and fan-out, and a spawn outside the allowed patterns needs escalation. Leases give continuous agents short, renewable observation authority; acting needs a per-alert response context; a failed health check withdraws response authority at once; and at the maximum lifetime without human re-attestation the lease degrades to observe-only, never extends.
+
+The Guardian itself (the ACS wire and the host shims) is not built yet.
 
 ## Development
 

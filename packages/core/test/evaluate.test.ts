@@ -17,7 +17,7 @@ function ctx(over: Partial<EvalContext> & { usage?: Record<string, CapUsage | nu
   const usage = over.usage ?? {};
   return {
     scores: over.scores ?? approveScore(0.94),
-    openContexts: over.openContexts ?? new Set(),
+    contexts: over.contexts ?? [{ id: "ctx-1", rows: ["invoice.approve", "invoice.duplicate-anomaly"] }],
     capUsage: (_row, capId, groupKey) => (`${capId} ${groupKey}` in usage ? usage[`${capId} ${groupKey}`]! : { total: "0", count: 0 }),
   };
 }
@@ -201,20 +201,20 @@ describe("preparatory calls need an open context", () => {
   const p = compile();
   const read = { tool: "mcp__erp__get_invoice", arguments: { invoice_id: "INV-1" } };
   it("no open context: unplaceable", () => {
-    const d = evaluate(p, read, ctx());
+    const d = evaluate(p, read, ctx({ contexts: [] }));
     expect(d.outcome).toBe("unplaceable");
     expect(codes(d)).toContain("context.none");
   });
   it("an open context for a served row: allowed", () => {
-    const d = evaluate(p, read, ctx({ openContexts: new Set(["invoice.approve"]) }));
+    const d = evaluate(p, read, ctx({ contexts: [{ id: "c", rows: ["invoice.approve"] }] }));
     expect(d.outcome).toBe("allow");
     expect(d.band).toBeNull();
   });
   it("a context for an unrelated row doesn't count", () => {
-    expect(evaluate(p, read, ctx({ openContexts: new Set(["contract.modify"]) })).outcome).toBe("unplaceable");
+    expect(evaluate(p, read, ctx({ contexts: [{ id: "c", rows: ["contract.modify"] }] })).outcome).toBe("unplaceable");
   });
   it("past the daily read cap: refused", () => {
-    const d = evaluate(p, read, ctx({ openContexts: new Set(["invoice.approve"]), usage: { "reads-per-day []": { count: 2000 } } }));
+    const d = evaluate(p, read, ctx({ contexts: [{ id: "c", rows: ["invoice.approve"] }], usage: { "reads-per-day []": { count: 2000 } } }));
     expect(d.outcome).toBe("refuse");
   });
 });

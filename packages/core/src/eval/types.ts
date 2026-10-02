@@ -45,8 +45,16 @@ export interface EvalContext {
   /** Usage of one row's cap for one group key. null means the history can't be read, which counts as breached.
    *  Cap ids are unique only within a row, so the row is part of the key. */
   capUsage(row: string, capId: string, groupKey: string): CapUsage | null;
-  /** Rows that currently have an open execution context in this session. */
-  openContexts: ReadonlySet<string>;
+  /** The session's live execution contexts. Without one covering a call's row there's no authority to act. */
+  contexts: readonly LiveContext[];
+}
+
+/** What the evaluator needs from a live execution context (see authority/contexts.ts). */
+export interface LiveContext {
+  id: string;
+  rows: readonly string[];
+  task?: string;
+  bandCeiling?: Readonly<Record<string, Band>>;
 }
 
 export interface Reason {

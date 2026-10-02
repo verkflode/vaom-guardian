@@ -10,6 +10,7 @@
 // A ledger whose history isn't loaded makes decide() throw (reserve refuses), so a Guardian makes no
 // decision at all until it knows what has already been used. That's stricter than reading every cap as
 // breached, which would still let a call through to review against unknown usage.
+import type { ContextRegistry } from "./authority/contexts.ts";
 import type { CapLedger } from "./caps/ledger.ts";
 import { evaluate } from "./eval/evaluate.ts";
 import type { Call, Policy, Score } from "./eval/types.ts";
@@ -18,17 +19,18 @@ import { buildRecord, recordedGroup, type DecisionRecord, type RecordInput } fro
 
 export interface DecideInput extends Omit<RecordInput, "call" | "decision" | "policy" | "scores"> {
   scores?: Record<string, Score>;
-  /** Rows with an open execution context in this session. */
-  openContexts?: ReadonlySet<string>;
+  /** The context registry; the session's live contexts at `ts` are the call's authority. None means no authority. */
+  contexts?: ContextRegistry;
 }
 
 export function decide(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput): DecisionRecord {
   const now = Date.parse(input.ts);
   if (Number.isNaN(now)) throw new Error(`decide: ts ${JSON.stringify(input.ts)} is not a timestamp`);
 
+  const live = input.contexts ? input.contexts.liveFor(input.session.id, now) : [];
   const decision = evaluate(policy, call, {
     ...(input.scores ? { scores: input.scores } : {}),
-    openContexts: input.openContexts ?? new Set(),
+    contexts: live,
     capUsage: (row, capId, rawGroup) => {
       const a = policy.rowById.get(row)?.authority;
       const cap = [...(a?.cumulativeCaps ?? []), ...(a?.rateCaps ?? [])].find((c: { id: string }) => c.id === capId);
@@ -38,8 +40,15 @@ export function decide(policy: Policy, call: Call, ledger: CapLedger, input: Dec
     },
   });
 
-  const { openContexts: _contexts, ...recordInput } = input;
-  const record = buildRecord({ ...recordInput, call, decision, policy, ...(input.scores ? { scores: input.scores } : {}) });
+  // Record the context the call ran under: the first live one covering its first placement's row.
+  const firstRow = decision.placements[0]?.row;
+  const used = firstRow ? live.find((c) => c.rows.includes(firstRow) || (policy.rowById.get(firstRow)?.authority?.serves ?? []).some((s: string) => c.rows.includes(s))) : undefined;
+  const { contexts: _registry, ...recordInput } = input;
+  const record = buildRecord({
+    ...recordInput,
+    ...(used && !input.context ? { context: { id: used.id, rows: [...used.rows] } } : {}),
+    call, decision, policy, ...(input.scores ? { scores: input.scores } : {}),
+  });
   ledger.reserve(record);
   return record;
 }
