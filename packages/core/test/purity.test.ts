@@ -68,6 +68,14 @@ describe("the core is pure", () => {
   });
 });
 
+describe("the core loads under Node's own TypeScript support", () => {
+  it("imports with type stripping alone, no bundler or compiler in between", () => {
+    const entry = join(pkg, "src", "index.ts");
+    const out = execFileSync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--input-type=module", "-e", `const m = await import(${JSON.stringify(entry)}); console.log(typeof m.decide)`], { encoding: "utf8" });
+    expect(out.trim()).toBe("function");
+  }, 60_000);
+});
+
 describe("the generated validators match the schemas", () => {
   it("regenerating changes nothing", () => {
     const out = execFileSync(process.execPath, [join(root, "scripts", "gen-validators.mjs"), "--check"], { encoding: "utf8" });

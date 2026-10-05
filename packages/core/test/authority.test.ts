@@ -20,13 +20,20 @@ const root = (reg: ContextRegistry, extra: object = {}) =>
   reg.open({ id: "root", session: "s1", agent, rows: ["invoice.approve", "invoice.duplicate-anomaly"], ...extra }, T0);
 
 describe("contexts", () => {
-  it("live for the shortest row lifetime, with a named default for rows that state none", () => {
+  it("live for the shortest stated row lifetime; the named default only when no row states one", () => {
     const reg = new ContextRegistry(policyWith());
-    const c = root(reg); // invoice.approve says PT15M; the duplicate row states none (default PT15M)
+    const c = root(reg); // invoice.approve states PT15M; the duplicate row states none and doesn't count
     expect(c.expiresAt - T0).toBe(min(15));
     expect(reg.live("root", T0 + min(15) - 1)).toBeDefined();
     expect(reg.live("root", T0 + min(15))).toBeUndefined();
     expect(reg.liveFor("s1", T0 + min(16))).toEqual([]);
+  });
+
+  it("a row stating no lifetime doesn't shorten a context; with none stated, the default applies", () => {
+    const longer = policyWith((m) => { m.rows[0].authority.executionContext.maxLifetime = "PT60M"; });
+    const reg = new ContextRegistry(longer);
+    expect(root(reg).expiresAt - T0).toBe(min(60));
+    expect(reg.open({ id: "dup-only", session: "s1", agent, rows: ["invoice.duplicate-anomaly"] }, T0).expiresAt - T0).toBe(min(15));
   });
 
   it("refuses rows a context can't cover", () => {
@@ -68,7 +75,7 @@ describe("deriving sub-agent contexts: attenuation only", () => {
   it("a capability outside the pattern, or an unknown type, needs escalation", () => {
     const reg = new ContextRegistry(policyWith());
     root(reg);
-    expect(reg.derive("root", child({ rows: ["invoice.approve"] }), T0)).toMatchObject({ ok: false, outcome: "escalate" });
+    expect(reg.derive("root", child({ rows: ["invoice.approve"], scopes: ["erp:invoice.approve"] }), T0)).toMatchObject({ ok: false, outcome: "escalate" });
     expect(reg.derive("root", child({ subagentType: "writer" }), T0)).toMatchObject({ ok: false, outcome: "escalate" });
   });
 
@@ -118,6 +125,12 @@ describe("the evaluator needs a context", () => {
     expect(d.reasons.map((r) => r.code)).toContain("context.task-mismatch");
     expect(run([{ id: "c", rows: ["invoice.approve"], task: "INV-1" }]).band).toBe("A");
   });
+  it("an observation context never authorises a decision, even one naming it in its scopes", () => {
+    // A real lease can't hold a decision capability (grant refuses it); the evaluator's own rule is tested here alone.
+    const d = run([{ id: "lease:x", rows: ["invoice.approve"], scopes: ["erp:invoice.approve"], observation: true }]);
+    expect(d.outcome).toBe("unplaceable");
+    expect(d.reasons.map((r) => r.code)).toContain("context.none");
+  });
   it("a context's band ceiling narrows", () => {
     const d = run([{ id: "c", rows: ["invoice.approve"], bandCeiling: { "invoice.approve": "B" } }]);
     expect([d.outcome, d.band]).toEqual(["review", "B"]);
@@ -128,6 +141,13 @@ describe("leases", () => {
   const healthy: Health = { agentVersion: "1.4.0", policyVersion: "1.1.0", breakerOpen: false, verificationCurrent: true, heartbeat: true };
   const setup = () => { const p = policyWith(); const contexts = new ContextRegistry(p); return { contexts, leases: new LeaseRegistry(p, contexts) }; };
   const grant = (leases: LeaseRegistry) => leases.grant({ id: "L1", row: "invoice.duplicate-anomaly", agent }, T0);
+
+  it("offers an observation context while it may observe, and not after it runs out", () => {
+    const { leases } = setup();
+    grant(leases);
+    expect(leases.observation("L1", T0 + min(30))).toEqual({ id: "lease:L1", rows: ["invoice.duplicate-anomaly"], scopes: ["erp:invoice.read", "erp:vendor.read"], observation: true });
+    expect(leases.observation("L1", T0 + min(61))).toBeUndefined();
+  });
 
   it("grants observation scopes only", () => {
     const { leases } = setup();
@@ -213,6 +233,7 @@ describe("leases", () => {
     grant(leases);
     leases.respond("L1", { contextId: "resp-1", session: "s9", alert: "A" }, T0);
     leases.revoke("L1");
+    expect(leases.observation("L1", T0)).toBeUndefined();
     expect(contexts.live("resp-1", T0)).toBeUndefined();
     expect(leases.mayObserve("L1", T0)).toBe(false);
   });

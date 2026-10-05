@@ -143,7 +143,12 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   };
 
   if (a.kind === "preparatory") {
-    if (!ctx.contexts.some((c) => (a.serves as string[]).some((s) => c.rows.includes(s)))) return fail("context.none", `no open execution context for a row ${row.id} serves (${a.serves.join(", ")})`);
+    // A lease's observation context authorises preparatory capabilities in its scopes, whatever they serve.
+    const observing = ctx.contexts.some((c) => c.observation === true && c.scopes?.includes(entry.capability));
+    const serving = ctx.contexts.filter((c) => !c.observation && (a.serves as string[]).some((s) => c.rows.includes(s)));
+    if (observing) { /* authorised by an observation lease */ }
+    else if (serving.length === 0) return fail("context.none", `no open execution context for a row ${row.id} serves (${a.serves.join(", ")})`);
+    else if (!serving.some((c) => inScope(c, entry.capability))) return fail("context.scope", `no context serving row ${row.id} has ${entry.capability} in its scope`);
     const hit = restrictionsHit(() => true);
     if (hit === "unplaceable") return fail("restriction.unevaluable", "a restriction couldn't be evaluated");
     if (hit) return { ...base, band: "non-delegable", outcome: "refuse", facts, reasons };
@@ -156,10 +161,13 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
 
   // Delegable: authority exists only inside a live execution context covering this row, bound to this
   // task if the call names one.
-  const covering = ctx.contexts.filter((c) => c.rows.includes(row.id));
+  // Observation contexts never authorise a decision.
+  const covering = ctx.contexts.filter((c) => !c.observation && c.rows.includes(row.id));
   if (covering.length === 0) return fail("context.none", `no open execution context covers row ${row.id}`);
+  const scoped = covering.filter((c) => inScope(c, entry.capability));
+  if (scoped.length === 0) return fail("context.scope", `no context covering row ${row.id} has ${entry.capability} in its scope`);
   const task = facts.task;
-  const applicable = task === undefined ? covering : covering.filter((c) => c.task === undefined || c.task === task);
+  const applicable = task === undefined ? scoped : scoped.filter((c) => c.task === undefined || c.task === task);
   if (applicable.length === 0) return fail("context.task-mismatch", `the call's task isn't the one its context is bound to`);
 
   // Confidence picks among the bands the matrix authorises; everything after can only narrow.
@@ -205,6 +213,11 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   const outcome: Outcome = band === "A" ? "allow" : band === "B" ? "review" : "escalate";
   const approverRole = band === "B" ? a.reviewer : band === "C" ? a.escalation.role : undefined;
   return withReservations({ ...base, band, outcome, ...(approverRole ? { approverRole } : {}), facts, reasons }, reservations);
+}
+
+/** A context without explicit scopes covers everything its rows reach; with scopes, only those. */
+function inScope(c: { scopes?: readonly string[] }, capability: string): boolean {
+  return c.scopes === undefined || c.scopes.includes(capability);
 }
 
 function withReservations(p: Placement, r: Reservation[]): Placement {

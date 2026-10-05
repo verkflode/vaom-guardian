@@ -1,0 +1,34 @@
+{
+  "$schema": "../vaom-binding.schema.json",
+  "format": "vaom.binding/0.1",
+  "id": "example.procurement.mro.mcp",
+  "version": "1.0.0",
+  "title": "Purchasing matrix on an agent runtime with a placeholder shop MCP server",
+  "host": { "id": "example-runtime", "toolSet": "placeholder shop MCP server 1.x" },
+  "matrix": { "id": "example.procurement.mro", "versions": ">=1.0.0 <2.0.0" },
+
+  "facts": {
+    "task": { "type": "string", "description": "Requisition id.", "record": "value" },
+    "total": { "type": "money", "description": "Cart total." },
+    "supplier": { "type": "string", "description": "Supplier id (a company).", "record": "value" },
+    "category": { "type": "string", "description": "Catalogue category.", "record": "value" },
+    "price_list_current": { "type": "boolean", "description": "The supplier's price list is within its review-by date." }
+  },
+
+  "tools": [
+    {
+      "id": "place-order",
+      "match": { "tool": "mcp__shop__place_order" },
+      "capability": "shop:order.place",
+      "facts": {
+        "task": { "arg": "/requisition_id" },
+        "total": { "amount": { "arg": "/total" }, "currency": { "arg": "/currency" } },
+        "supplier": { "arg": "/supplier" },
+        "category": { "arg": "/category" },
+        "price_list_current": { "arg": "/price_list_current" }
+      }
+    },
+    { "id": "flag-price", "match": { "tool": "mcp__shop__flag_price" }, "capability": "shop:price.flag" },
+    { "id": "get-offers", "match": { "tool": "mcp__shop__get_offers" }, "capability": "shop:offer.read" }
+  ]
+}

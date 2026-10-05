@@ -1,0 +1,83 @@
+{
+  "$schema": "../vaom-binding.schema.json",
+  "format": "vaom.binding/0.1",
+  "id": "example.ops.incident.mcp",
+  "version": "1.0.0",
+  "title": "Incident matrix on an agent runtime with placeholder deploy, telemetry, status, change and alerting MCP servers",
+  "host": {
+    "id": "example-runtime",
+    "toolSet": "placeholder deploy/telemetry/status/change/alerting MCP servers 1.x"
+  },
+  "matrix": {
+    "id": "example.ops.incident",
+    "versions": ">=1.0.0 <2.0.0"
+  },
+  "facts": {
+    "task": {
+      "type": "string",
+      "description": "Incident id.",
+      "record": "value"
+    },
+    "stateless": {
+      "type": "boolean",
+      "description": "The service holds no state, so a restart is fully reversible."
+    }
+  },
+  "tools": [
+    {
+      "id": "declare-incident",
+      "match": {
+        "tool": "mcp__incident__declare"
+      },
+      "capability": "incident:declare",
+      "facts": {
+        "task": {
+          "arg": "/alert_id"
+        }
+      }
+    },
+    {
+      "id": "page",
+      "match": {
+        "tool": "mcp__alerting__page"
+      },
+      "capability": "alerting:page"
+    },
+    {
+      "id": "rolling-restart",
+      "match": {
+        "tool": "mcp__deploy__rolling_restart"
+      },
+      "capability": "deploy:service.rolling-restart",
+      "facts": {
+        "task": {
+          "arg": "/incident_id"
+        },
+        "stateless": {
+          "arg": "/stateless"
+        }
+      }
+    },
+    {
+      "id": "query-telemetry",
+      "match": {
+        "tool": "mcp__telemetry__query"
+      },
+      "capability": "telemetry:read"
+    },
+    {
+      "id": "upstream-status",
+      "match": {
+        "tool": "mcp__status__upstream"
+      },
+      "capability": "status:upstream.read"
+    },
+    {
+      "id": "draft-change",
+      "match": {
+        "tool": "mcp__change__draft_proposal"
+      },
+      "capability": "change:proposal.draft"
+    }
+  ]
+}

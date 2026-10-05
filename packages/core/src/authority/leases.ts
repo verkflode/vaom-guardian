@@ -11,7 +11,7 @@
 //   extended, and observation doesn't lapse either (a lapsed lease would blind the monitor). Observe-only
 //   renewals continue while health holds.
 // - Revoking a lease revokes every response context derived from it.
-import type { Policy } from "../eval/types.ts";
+import type { LiveContext, Policy } from "../eval/types.ts";
 import { durationSeconds } from "../lint/duration.ts";
 import type { Context, ContextRegistry } from "./contexts.ts";
 
@@ -42,7 +42,12 @@ export type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 export class LeaseRegistry {
   private byId = new Map<string, Lease>();
-  constructor(private policy: Policy, private contexts: ContextRegistry) {}
+  private policy: Policy;
+  private contexts: ContextRegistry;
+  constructor(policy: Policy, contexts: ContextRegistry) {
+    this.policy = policy;
+    this.contexts = contexts;
+  }
 
   grant(spec: { id: string; row: string; agent: { id: string; version: string }; scopes?: string[] }, now: number): Lease {
     if (this.byId.has(spec.id)) throw new Error(`lease id ${spec.id} has been used`);
@@ -137,6 +142,14 @@ export class LeaseRegistry {
 
   get(id: string): Lease | undefined {
     return this.byId.get(id);
+  }
+
+  /** The lease's observation context for the evaluator, while it may observe: its scopes, preparatory
+   *  capabilities only (the evaluator enforces that), never a decision. */
+  observation(id: string, now: number): LiveContext | undefined {
+    const l = this.byId.get(id);
+    if (!l || !this.mayObserve(id, now)) return undefined;
+    return { id: `lease:${l.id}`, rows: [l.row], scopes: [...l.scopes], observation: true };
   }
 
   /** Observation is allowed while the lease is unexpired and not revoked, observe-only included. */

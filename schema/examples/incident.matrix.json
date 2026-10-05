@@ -1,0 +1,449 @@
+{
+  "$schema": "../vaom-matrix-0.2.schema.json",
+  "format": "vaom.matrix/0.2",
+  "id": "example.ops.incident",
+  "version": "1.0.0",
+  "title": "Autonomous incident remediation (VAOM v5 worked example 7D)",
+  "description": "A SaaS provider's incident-remediation agent: monitoring on a lease, diagnosis by attenuated sub-agents, and a short enumerated list of bounded remediations. Production configuration changes, schema migrations, customer-data operations and anything touching the payment pipeline are non-delegable. Figures the whitepaper states are used as stated (a 60-minute context, 20-minute read-only sub-agents, chain depth two, composite 0.93 reaching Band A); thresholds, calibration records, lease lifetimes and oversight figures it doesn't state are illustrative.",
+  "effective": {
+    "from": "2026-10-01T00:00:00Z"
+  },
+  "approval": {
+    "role": "sre-lead",
+    "date": "2026-10-01",
+    "ref": "placeholder://approvals/incident-matrix-1.0.0"
+  },
+  "roles": {
+    "sre-lead": {
+      "title": "SRE lead on call"
+    },
+    "sre-secondary": {
+      "title": "Secondary on-call SRE"
+    },
+    "head-of-engineering": {
+      "title": "Head of engineering"
+    },
+    "platform-owner": {
+      "title": "Platform owner"
+    },
+    "platform-owner-deputy": {
+      "title": "Deputy platform owner"
+    }
+  },
+  "boundaries": {
+    "no-config-write": {
+      "kind": "tool",
+      "intendedMechanism": "absent",
+      "description": "No config-write tool is mounted in the agent's tool manifest, and its credentials carry no config-write scope.",
+      "verification": {
+        "probe": "Attempt a production config write from inside the agent context.",
+        "target": "placeholder://canary/config",
+        "every": "P7D",
+        "alsoOn": [
+          "deploy",
+          "agent-version",
+          "tool-manifest",
+          "credentials"
+        ]
+      }
+    },
+    "no-restricted-ops": {
+      "kind": "tool",
+      "intendedMechanism": "absent",
+      "description": "No schema-migration, customer-data or payment-pipeline tool is mounted, and no such scope is grantable.",
+      "verification": {
+        "probe": "Attempt a schema migration, a customer-record write and a payment-pipeline call against canaries.",
+        "target": "placeholder://canary/restricted",
+        "every": "P7D",
+        "alsoOn": [
+          "deploy",
+          "tool-manifest",
+          "credentials"
+        ]
+      }
+    }
+  },
+  "oversight": {
+    "fundedReviewerHoursPerWeek": 8,
+    "fundedBy": {
+      "role": "head-of-engineering",
+      "date": "2026-10-01"
+    },
+    "maxUtilization": 0.8,
+    "reviewerLevelMetrics": {
+      "enabled": false
+    }
+  },
+  "circuitBreakers": [
+    {
+      "id": "non-delegable-touch",
+      "condition": {
+        "kind": "non-delegable-touch"
+      },
+      "action": "suspend",
+      "notify": [
+        "sre-lead"
+      ]
+    },
+    {
+      "id": "scope-request-outside-manifest",
+      "condition": {
+        "kind": "scope-denial-rate",
+        "threshold": 1,
+        "window": "PT1H"
+      },
+      "action": "suspend",
+      "notify": [
+        "sre-lead"
+      ]
+    },
+    {
+      "id": "chain-depth",
+      "condition": {
+        "kind": "chain-depth",
+        "threshold": 2
+      },
+      "action": "suspend",
+      "notify": [
+        "sre-lead"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "incident.monitor",
+      "title": "Detect incidents and declare them",
+      "description": "Continuous detection (Pattern 5). The monitoring agent holds an observation lease, not standing authority: it reads telemetry and pages the on-call human under the lease, and declares an incident (activating remediation) only through a per-alert response context. Lease lifetimes, the threshold and the calibration record are illustrative.",
+      "pattern": "monitor-and-intervene",
+      "profile": {
+        "reversibility": "fully-reversible",
+        "consequenceScope": "internal-operational",
+        "regulatoryExposure": "none",
+        "confidenceMeasurability": "quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "sre-lead",
+        "deputy": "sre-secondary",
+        "accepted": {
+          "role": "sre-lead",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "incident:declare"
+      ],
+      "authority": {
+        "kind": "delegable",
+        "routing": {
+          "high": "A",
+          "medium": "A",
+          "low": "A"
+        },
+        "confidence": {
+          "scoringPolicy": {
+            "id": "incident-detection",
+            "version": "1.0"
+          },
+          "thresholds": {
+            "high": 0.8,
+            "medium": 0.5
+          },
+          "calibration": {
+            "errorTarget": 0.05,
+            "confidenceLevel": 0.95,
+            "sampleSize": 500,
+            "sampleDate": "2026-09-01"
+          }
+        },
+        "reviewer": "sre-lead",
+        "escalation": {
+          "role": "head-of-engineering",
+          "sla": "PT30M"
+        },
+        "lease": {
+          "observationCapabilities": [
+            "telemetry:read",
+            "alerting:page"
+          ],
+          "lifetime": "PT1H",
+          "maxLifetime": "P30D",
+          "responseContextLifetime": "PT10M",
+          "reattestation": {
+            "evidencePack": [
+              "interventions",
+              "false-alerts",
+              "missed-detections",
+              "circuit-breaker-events",
+              "boundary-verification",
+              "scorecard"
+            ]
+          }
+        }
+      },
+      "oversight": {
+        "expectedPerWeek": {
+          "A": 15
+        },
+        "reviewMinutes": 0,
+        "escalationMinutes": 0,
+        "auditSampleRate": 0.2,
+        "auditMinutes": 10
+      }
+    },
+    {
+      "id": "remediation.restart",
+      "title": "Rolling restart of a stateless service",
+      "description": "One of the short enumerated bounded remediations (Execute & Audit). The paper's composite of 0.93 reaches Band A with the pre-flight check passing; the 0.90 and 0.70 thresholds, the calibration record and oversight figures are illustrative. The 60-minute context and the sub-agent patterns are as stated.",
+      "pattern": "execute-and-audit",
+      "profile": {
+        "reversibility": "fully-reversible",
+        "consequenceScope": "external-relational",
+        "regulatoryExposure": "none",
+        "confidenceMeasurability": "quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "sre-lead",
+        "deputy": "sre-secondary",
+        "accepted": {
+          "role": "sre-lead",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "deploy:service.rolling-restart"
+      ],
+      "requiresFacts": [
+        "task"
+      ],
+      "authority": {
+        "kind": "delegable",
+        "routing": {
+          "high": "A",
+          "medium": "B",
+          "low": "C"
+        },
+        "confidence": {
+          "scoringPolicy": {
+            "id": "remediation-gate",
+            "version": "4.1"
+          },
+          "thresholds": {
+            "high": 0.9,
+            "medium": 0.7
+          },
+          "calibration": {
+            "errorTarget": 0.02,
+            "confidenceLevel": 0.95,
+            "sampleSize": 800,
+            "sampleDate": "2026-09-01",
+            "method": "learn-then-test"
+          },
+          "verificationRequired": true
+        },
+        "reviewer": "sre-lead",
+        "escalation": {
+          "role": "head-of-engineering",
+          "sla": "PT30M"
+        },
+        "noValueCeiling": {
+          "reason": "A restart carries no amount; its bounds are the enumerated remediation list, statelessness and the pre-flight check.",
+          "approvedBy": {
+            "role": "sre-lead",
+            "date": "2026-10-01"
+          }
+        },
+        "restrictions": [
+          {
+            "id": "stateful-service",
+            "when": {
+              "fact": "stateless",
+              "op": "eq",
+              "value": false
+            },
+            "band": "C",
+            "reason": "Only stateless services are on the bounded remediation list."
+          }
+        ],
+        "executionContext": {
+          "maxLifetime": "PT60M"
+        },
+        "chain": {
+          "maxDepth": 1,
+          "maxFanOut": 2,
+          "allowedSubagents": [
+            {
+              "type": "log-analysis",
+              "capabilities": [
+                "telemetry:read"
+              ],
+              "maxLifetime": "PT20M",
+              "maxCount": 1
+            },
+            {
+              "type": "dependency-check",
+              "capabilities": [
+                "telemetry:read",
+                "status:upstream.read"
+              ],
+              "maxLifetime": "PT20M",
+              "maxCount": 1
+            }
+          ]
+        }
+      },
+      "oversight": {
+        "expectedPerWeek": {
+          "A": 20,
+          "B": 5,
+          "C": 1
+        },
+        "reviewMinutes": 15,
+        "escalationMinutes": 30,
+        "auditSampleRate": 0.2,
+        "auditMinutes": 20
+      }
+    },
+    {
+      "id": "diagnosis.read",
+      "title": "Read telemetry and upstream status",
+      "description": "Read-only diagnosis in service of a remediation: what the log-analysis and dependency-check sub-agents are scoped to.",
+      "accountability": {
+        "form": "single",
+        "role": "sre-lead",
+        "deputy": "sre-secondary",
+        "accepted": {
+          "role": "sre-lead",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "telemetry:read",
+        "status:upstream.read"
+      ],
+      "authority": {
+        "kind": "preparatory",
+        "serves": [
+          "remediation.restart"
+        ],
+        "effect": "read"
+      }
+    },
+    {
+      "id": "incident.page",
+      "title": "Page the on-call human",
+      "description": "A page is a message addressed to a human, so it's preparatory (effect draft): alerting, never execution.",
+      "accountability": {
+        "form": "single",
+        "role": "sre-lead",
+        "deputy": "sre-secondary",
+        "accepted": {
+          "role": "sre-lead",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "alerting:page"
+      ],
+      "authority": {
+        "kind": "preparatory",
+        "serves": [
+          "incident.monitor"
+        ],
+        "effect": "draft"
+      }
+    },
+    {
+      "id": "config.change",
+      "title": "Change production configuration",
+      "description": "Non-delegable, and structurally so: no config-write tool is mounted. The agent drafts a change proposal (row config.propose) for the normal change process.",
+      "pattern": "prepare-and-present",
+      "profile": {
+        "reversibility": "reversible-with-friction",
+        "consequenceScope": "external-relational",
+        "regulatoryExposure": "none",
+        "confidenceMeasurability": "partially-quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "platform-owner",
+        "deputy": "platform-owner-deputy",
+        "accepted": {
+          "role": "platform-owner",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "config:production.write"
+      ],
+      "authority": {
+        "kind": "non-delegable",
+        "reason": "Production configuration changes go through the normal change process.",
+        "agentMayPrepare": true,
+        "boundaries": [
+          "no-config-write"
+        ]
+      }
+    },
+    {
+      "id": "config.propose",
+      "title": "Draft a configuration change proposal",
+      "accountability": {
+        "form": "single",
+        "role": "platform-owner",
+        "deputy": "platform-owner-deputy",
+        "accepted": {
+          "role": "platform-owner",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "change:proposal.draft"
+      ],
+      "authority": {
+        "kind": "preparatory",
+        "serves": [
+          "config.change"
+        ],
+        "effect": "draft"
+      }
+    },
+    {
+      "id": "production.restricted",
+      "title": "Schema migrations, customer data, payment pipeline",
+      "pattern": "prepare-and-present",
+      "profile": {
+        "reversibility": "irreversible",
+        "consequenceScope": "external-relational",
+        "regulatoryExposure": "general-context",
+        "confidenceMeasurability": "judgment-dependent",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": {
+        "form": "single",
+        "role": "platform-owner",
+        "deputy": "platform-owner-deputy",
+        "accepted": {
+          "role": "platform-owner",
+          "date": "2026-10-01"
+        }
+      },
+      "capabilities": [
+        "db:schema.migrate",
+        "data:customer.write",
+        "payments:pipeline.write"
+      ],
+      "authority": {
+        "kind": "non-delegable",
+        "reason": "Irreversible or customer-affecting operations outside the bounded remediation list.",
+        "boundaries": [
+          "no-restricted-ops"
+        ]
+      }
+    }
+  ]
+}

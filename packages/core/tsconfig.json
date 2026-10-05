@@ -16,7 +16,8 @@
     "checkJs": false,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": []
+    "types": [],
+    "erasableSyntaxOnly": true
   },
   "include": [
     "src/**/*"

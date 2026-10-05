@@ -53,6 +53,11 @@ export interface EvalContext {
 export interface LiveContext {
   id: string;
   rows: readonly string[];
+  /** Capabilities usable in this context (VAOM's scope set). Absent: everything its rows reach. */
+  scopes?: readonly string[];
+  /** An observation context from a live lease: authorises only preparatory capabilities in its scopes
+   *  (reading, and messages addressed to humans), never a decision. */
+  observation?: boolean;
   task?: string;
   bandCeiling?: Readonly<Record<string, Band>>;
 }

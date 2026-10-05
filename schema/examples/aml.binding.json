@@ -1,0 +1,47 @@
+{
+  "$schema": "../vaom-binding.schema.json",
+  "format": "vaom.binding/0.1",
+  "id": "example.aml.triage.mcp",
+  "version": "1.0.0",
+  "title": "AML triage matrix on an agent runtime with a placeholder case-management MCP server",
+  "host": { "id": "example-runtime", "toolSet": "placeholder cms MCP server 1.x" },
+  "matrix": { "id": "example.aml.triage", "versions": ">=1.0.0 <2.0.0" },
+
+  "facts": {
+    "task": { "type": "string", "description": "Alert id.", "record": "value" },
+    "amount": { "type": "money", "description": "Largest transaction amount in the alert." },
+    "pep": { "type": "boolean", "description": "A politically exposed person is involved." },
+    "sanctioned": { "type": "boolean", "description": "A sanctioned jurisdiction is involved." }
+  },
+
+  "tools": [
+    {
+      "id": "dismiss-one",
+      "match": { "tool": "mcp__cms__dismiss_alert" },
+      "capability": "cms:alert.dismiss",
+      "facts": {
+        "task": { "arg": "/alert_id" },
+        "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
+        "pep": { "arg": "/pep" },
+        "sanctioned": { "arg": "/sanctioned_jurisdiction" }
+      }
+    },
+    {
+      "id": "dismiss-batch",
+      "match": { "tool": "mcp__cms__dismiss_alerts" },
+      "capability": "cms:alert.dismiss",
+      "items": {
+        "arg": "/alerts",
+        "maxItems": 500,
+        "facts": {
+          "task": { "arg": "/alert_id" },
+          "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
+          "pep": { "arg": "/pep" },
+          "sanctioned": { "arg": "/sanctioned_jurisdiction" }
+        }
+      }
+    },
+    { "id": "read-alert", "match": { "tool": "mcp__cms__get_alert" }, "capability": "cms:alert.read" },
+    { "id": "prepare-package", "match": { "tool": "mcp__cms__prepare_package" }, "capability": "cms:package.prepare" }
+  ]
+}

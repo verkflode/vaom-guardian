@@ -4,7 +4,9 @@
 //
 // Containment rules:
 // - A context covers only delegable rows, or non-delegable rows that allow preparation. Nothing else.
-// - Its lifetime is the shortest maxLifetime among its rows (DEFAULT_CONTEXT_LIFETIME where a row states none).
+// - Its lifetime is the shortest maxLifetime among the rows that state one; DEFAULT_CONTEXT_LIFETIME only
+//   when none does. (A row that states none, such as a non-delegable row covered for preparation, doesn't
+//   shorten a context its delegable rows set.)
 // - A derived (child) context can only drop rows, lower band ceilings and end sooner. Depth and fan-out are
 //   bounded by the parent row's chain limits; a spawn outside the allowed patterns needs escalation.
 // - Revocation cascades to every context derived from the revoked one. Ids are never reusable, so a closed,
@@ -12,7 +14,7 @@
 import { durationSeconds } from "../lint/duration.ts";
 import type { Band, Policy } from "../eval/types.ts";
 
-/** Lifetime for a context whose rows state no executionContext.maxLifetime: short, as VAOM asks. */
+/** Lifetime for a context none of whose rows states executionContext.maxLifetime: short, as VAOM asks. */
 export const DEFAULT_CONTEXT_LIFETIME = "PT15M";
 
 export interface ContextSpec {
@@ -21,6 +23,9 @@ export interface ContextSpec {
   agent: { id: string; version?: string };
   /** Matrix rows the context may act on. */
   rows: string[];
+  /** Capabilities usable in this context (VAOM's scope set). Absent: every capability its rows reach,
+   *  meaning their own and those of preparatory rows serving them. */
+  scopes?: string[];
   /** The workflow instance it's bound to (invoice id, incident id). Calls with a different `task` fact are unplaceable. */
   task?: string;
   /** Per-row ceilings, for attenuation: a row capped at B can't reach A in this context. */
@@ -46,7 +51,10 @@ const RANK: Record<Band, number> = { A: 0, B: 1, C: 2, "non-delegable": 3 };
 
 export class ContextRegistry {
   private byId = new Map<string, Context>();
-  constructor(private policy: Policy) {}
+  private policy: Policy;
+  constructor(policy: Policy) {
+    this.policy = policy;
+  }
 
   /** Open a root context at activation. Throws on an invalid spec: nothing is opened. */
   open(spec: ContextSpec, now: number): Context {
@@ -79,9 +87,14 @@ export class ContextRegistry {
     if (children.length >= chain.maxFanOut) return { ok: false, outcome: "refuse", reason: `fan-out ${chain.maxFanOut} reached: an authority breach` };
     const pattern = (chain.allowedSubagents ?? []).find((p: { type: string }) => p.type === child.subagentType);
     if (!pattern) return { ok: false, outcome: "escalate", reason: `sub-agent type ${child.subagentType} is outside the allowed patterns` };
-    const childCaps = child.rows.flatMap((r) => this.policy.rowById.get(r)?.capabilities ?? []);
-    const notAllowed = childCaps.filter((c: string) => !pattern.capabilities.includes(c));
-    if (notAllowed.length) return { ok: false, outcome: "escalate", reason: `capabilities ${notAllowed.join(", ")} are outside the ${child.subagentType} pattern` };
+    // The child's scope: what it asks for (default: the whole pattern), within the parent's reach.
+    const parentReach = new Set(this.reach(parent));
+    const scopes = child.scopes ?? [...pattern.capabilities].filter((c: string) => parentReach.has(c));
+    const outsidePattern = scopes.filter((c) => !pattern.capabilities.includes(c));
+    if (outsidePattern.length) return { ok: false, outcome: "escalate", reason: `capabilities ${outsidePattern.join(", ")} are outside the ${child.subagentType} pattern` };
+    const beyondParent = scopes.filter((c) => !parentReach.has(c));
+    if (beyondParent.length) return { ok: false, outcome: "refuse", reason: `capabilities ${beyondParent.join(", ")} are beyond the parent context's reach` };
+    if (scopes.length === 0) return { ok: false, outcome: "refuse", reason: "the child context would have no capabilities" };
     if (pattern.maxCount !== undefined && children.filter((c) => c.subagentType === child.subagentType).length >= pattern.maxCount) {
       return { ok: false, outcome: "refuse", reason: `at most ${pattern.maxCount} ${child.subagentType} sub-agents` };
     }
@@ -93,12 +106,13 @@ export class ContextRegistry {
       const strict = p && c ? (RANK[c] > RANK[p] ? c : p) : (p ?? c);
       if (strict) bandCeiling[r] = strict;
     }
-    try { this.checkSpec({ ...child, bandCeiling }); } catch (e) { return { ok: false, outcome: "refuse", reason: (e as Error).message }; }
+    // The whole child spec, computed scopes included, must hold on its own: scopes reachable from its rows.
+    try { this.checkSpec({ ...child, scopes, bandCeiling }); } catch (e) { return { ok: false, outcome: "refuse", reason: (e as Error).message }; }
 
     const ownLife = child.lifetime ? durationSeconds(child.lifetime) : null;
     const patternLife = pattern.maxLifetime ? durationSeconds(pattern.maxLifetime) : null;
     const expiresAt = Math.min(parent.expiresAt, now + this.lifetimeMs(child.rows), ...(ownLife !== null ? [now + ownLife * 1000] : []), ...(patternLife !== null ? [now + patternLife * 1000] : []));
-    const ctx: Context = { ...child, bandCeiling, openedAt: now, expiresAt, parent: parentId, depthLeft: parent.depthLeft - 1, subagentType: child.subagentType, state: "open" };
+    const ctx: Context = { ...child, scopes, bandCeiling, openedAt: now, expiresAt, parent: parentId, depthLeft: parent.depthLeft - 1, subagentType: child.subagentType, state: "open" };
     this.byId.set(child.id, ctx);
     return { ok: true, context: ctx };
   }
@@ -127,13 +141,25 @@ export class ContextRegistry {
     return [...this.byId.values()].filter((c) => c.session === session && c.state === "open" && now < c.expiresAt);
   }
 
+  /** Every capability a context can use: its explicit scopes, or its rows' capabilities plus those of
+   *  preparatory rows serving them. */
+  reach(c: ContextSpec): string[] {
+    if (c.scopes) return [...c.scopes];
+    const out = new Set<string>();
+    for (const row of this.policy.matrix.rows) {
+      const a = row.authority;
+      if (c.rows.includes(row.id) || (a.kind === "preparatory" && (a.serves as string[]).some((s) => c.rows.includes(s)))) for (const cap of row.capabilities) out.add(cap);
+    }
+    return [...out];
+  }
+
   private lifetimeMs(rows: string[]): number {
     const fallback = durationSeconds(DEFAULT_CONTEXT_LIFETIME)!;
-    const secs = rows.map((r) => {
-      const d = this.policy.rowById.get(r)?.authority?.executionContext?.maxLifetime;
-      return d ? (durationSeconds(d) ?? fallback) : fallback;
-    });
-    return Math.min(...secs) * 1000;
+    const stated = rows
+      .map((r) => this.policy.rowById.get(r)?.authority?.executionContext?.maxLifetime as string | undefined)
+      .filter((d): d is string => d !== undefined)
+      .map((d) => durationSeconds(d) ?? fallback);
+    return (stated.length ? Math.min(...stated) : fallback) * 1000;
   }
 
   private checkSpec(spec: ContextSpec): void {
@@ -147,5 +173,11 @@ export class ContextRegistry {
       if (a.kind === "non-delegable" && a.agentMayPrepare !== true) throw new Error(`row ${r} is non-delegable and doesn't allow preparation`);
     }
     for (const r of Object.keys(spec.bandCeiling ?? {})) if (!spec.rows.includes(r)) throw new Error(`band ceiling for ${r}, which the context doesn't cover`);
+    if (spec.scopes) {
+      const { scopes: _ownScopes, ...unscoped } = spec;
+      const reach = new Set(this.reach(unscoped));
+      const beyond = spec.scopes.filter((c) => !reach.has(c));
+      if (beyond.length) throw new Error(`scopes ${beyond.join(", ")} aren't reachable from the context's rows`);
+    }
   }
 }

@@ -27,6 +27,8 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
 
 **Execution contexts and leases** bound authority in time. A call has authority only inside a live context covering its row (bound to its task, if given); contexts expire, can't be reused, and revocation cascades. Sub-agent contexts can only narrow: fewer rows, stricter band ceilings, earlier expiry, within the matrix's depth and fan-out, and a spawn outside the allowed patterns needs escalation. Leases give continuous agents short, renewable observation authority; acting needs a per-alert response context; a failed health check withdraws response authority at once; and at the maximum lifetime without human re-attestation the lease degrades to observe-only, never extends.
 
+**VAOM v5's worked examples run end to end** (`packages/core/test/worked-examples.test.ts`): 7B AML triage, 7D autonomous incident remediation and 7E delegated purchasing, each with its own matrix and binding in `schema/examples/`. Every case quotes the whitepaper sentence it checks. Figures the paper doesn't state are illustrative in the example matrices, which say so. These double as candidate conformance vectors for ACS.
+
 The Guardian itself (the ACS wire and the host shims) is not built yet.
 
 ## Development

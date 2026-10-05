@@ -1,0 +1,124 @@
+{
+  "$schema": "../vaom-matrix-0.2.schema.json",
+  "format": "vaom.matrix/0.2",
+  "id": "example.aml.triage",
+  "version": "1.0.0",
+  "title": "AML alert triage (VAOM v5 worked example 7B)",
+  "description": "Alert triage at a mid-sized European bank: about 800 alerts a day, roughly 95% false positives. Figures the whitepaper states are used as stated; figures it doesn't state (calibration samples, the lower confidence threshold, review times, funded hours) are illustrative and say so in each row.",
+  "effective": { "from": "2026-10-01T00:00:00Z" },
+  "approval": { "role": "aml-head", "date": "2026-10-01", "ref": "placeholder://approvals/aml-matrix-1.0.0" },
+
+  "roles": {
+    "aml-head": { "title": "Head of AML operations" },
+    "aml-head-deputy": { "title": "Deputy head of AML operations" },
+    "aml-investigator": { "title": "AML investigator" },
+    "mlro": { "title": "Money Laundering Reporting Officer" },
+    "mlro-deputy": { "title": "Deputy MLRO" }
+  },
+
+  "boundaries": {
+    "no-sar-filing-tool": {
+      "kind": "tool",
+      "intendedMechanism": "absent",
+      "description": "No capability to file a suspicious activity report is mounted for the agent, and its credentials carry no filing scope.",
+      "verification": { "probe": "Attempt a SAR submission from inside the agent context.", "target": "placeholder://canary/fiu-sandbox", "every": "P7D", "alsoOn": ["deploy", "agent-version", "tool-manifest", "credentials"] }
+    }
+  },
+
+  "oversight": {
+    "fundedReviewerHoursPerWeek": 300,
+    "fundedBy": { "role": "aml-head", "date": "2026-10-01" },
+    "maxUtilization": 0.8,
+    "reviewerLevelMetrics": { "enabled": false }
+  },
+
+  "circuitBreakers": [
+    { "id": "non-delegable-touch", "condition": { "kind": "non-delegable-touch" }, "action": "suspend", "notify": ["aml-head", "mlro"] },
+    { "id": "sar-boundary-failed", "condition": { "kind": "boundary-verification-failed", "boundary": "no-sar-filing-tool" }, "action": "suspend", "notify": ["mlro"] }
+  ],
+
+  "rows": [
+    {
+      "id": "alert.dismiss",
+      "title": "Dismiss an alert outside the typologies",
+      "description": "The narrow delegated slice of a regulated decision: dismissing alerts that deterministic checks confirm fall outside the typologies altogether (own-account transfers, salary payments matching employer records, utility payments within historical range). The thresholds' upper value 0.95 follows the paper (composites above 0.95 reach Band A; 0.83 reaches review); the lower value 0.70, the calibration record, review and audit times are illustrative.",
+      "pattern": "triage-and-route",
+      "profile": {
+        "reversibility": "fully-reversible",
+        "consequenceScope": "external-regulatory",
+        "regulatoryExposure": "regulated-decision",
+        "confidenceMeasurability": "quantifiable",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": { "form": "single", "role": "aml-head", "deputy": "aml-head-deputy", "accepted": { "role": "aml-head", "date": "2026-10-01" } },
+      "capabilities": ["cms:alert.dismiss"],
+      "requiresFacts": ["task"],
+      "authority": {
+        "kind": "delegable",
+        "routing": { "high": "A", "medium": "B", "low": "C" },
+        "confidence": {
+          "scoringPolicy": { "id": "aml-dismissal", "version": "2.0" },
+          "thresholds": { "high": 0.95, "medium": 0.7 },
+          "calibration": { "errorTarget": 0.005, "confidenceLevel": 0.95, "sampleSize": 20000, "sampleDate": "2026-09-01", "method": "learn-then-test" },
+          "verificationRequired": true
+        },
+        "reviewer": "aml-investigator",
+        "escalation": { "role": "mlro", "sla": "PT4H" },
+        "valueCeiling": {
+          "limit": { "amount": "10000", "currency": "EUR" },
+          "fact": "amount",
+          "onExceed": "non-delegable"
+        },
+        "restrictions": [
+          { "id": "pep", "when": { "fact": "pep", "op": "eq", "value": true }, "band": "non-delegable", "reason": "No alert involving a politically exposed person may be auto-dismissed." },
+          { "id": "sanctioned-jurisdiction", "when": { "fact": "sanctioned", "op": "eq", "value": true }, "band": "non-delegable", "reason": "No alert involving a sanctioned jurisdiction may be auto-dismissed." }
+        ],
+        "regulatedJustification": {
+          "retainedByHuman": "The regulated determination itself, whether the activity is suspicious and whether a SAR must be filed, stays non-delegable (row sar.determine) under Prepare & Present.",
+          "whyNarrower": "Only alerts that deterministic checks confirm fall outside the typologies altogether are dismissed. That narrows regulatory exposure rather than expanding it, and a dismissed alert can be reopened and re-triaged.",
+          "bounds": "Hard non-delegable overrides for politically exposed persons, sanctioned jurisdictions and amounts over the reporting threshold (the ceiling), whatever the score; independent verification required for Band A; a 10% weekly audit of auto-dismissals."
+        },
+        "executionContext": { "maxLifetime": "PT4H" }
+      },
+      "oversight": {
+        "expectedPerWeek": { "A": 5250, "B": 350, "C": 35 },
+        "reviewMinutes": 30,
+        "escalationMinutes": 60,
+        "auditSampleRate": 0.1,
+        "auditMinutes": 3,
+        "minPlausibleReviewSeconds": 120,
+        "recordsFeed": ["investigations", "regulatory-reporting"],
+        "seeding": { "enabled": false }
+      }
+    },
+    {
+      "id": "sar.determine",
+      "title": "Determine suspicion and file a SAR",
+      "description": "Whether activity is suspicious and whether a SAR must be filed: the MLRO's determination. The agent assembles the investigation package (row alert.prepare) and never files.",
+      "pattern": "prepare-and-present",
+      "profile": {
+        "reversibility": "irreversible",
+        "consequenceScope": "external-regulatory",
+        "regulatoryExposure": "prohibited-from-full-automation",
+        "confidenceMeasurability": "judgment-dependent",
+        "accountabilityClarity": "clear-single-owner"
+      },
+      "accountability": { "form": "single", "role": "mlro", "deputy": "mlro-deputy", "accepted": { "role": "mlro", "date": "2026-10-01" } },
+      "capabilities": ["fiu:sar.file"],
+      "authority": {
+        "kind": "non-delegable",
+        "reason": "A regulated determination that law reserves to a human: suspicion and SAR filing.",
+        "agentMayPrepare": true,
+        "boundaries": ["no-sar-filing-tool"]
+      }
+    },
+    {
+      "id": "alert.prepare",
+      "title": "Assemble the investigation package",
+      "description": "Reading the alert, the account profile and transaction history, and drafting the package an investigator or the MLRO decides on.",
+      "accountability": { "form": "single", "role": "aml-head", "deputy": "aml-head-deputy", "accepted": { "role": "aml-head", "date": "2026-10-01" } },
+      "capabilities": ["cms:alert.read", "cms:package.prepare"],
+      "authority": { "kind": "preparatory", "serves": ["alert.dismiss", "sar.determine"], "effect": "draft" }
+    }
+  ]
+}

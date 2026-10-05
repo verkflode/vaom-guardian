@@ -13,7 +13,7 @@
 import type { ContextRegistry } from "./authority/contexts.ts";
 import type { CapLedger } from "./caps/ledger.ts";
 import { evaluate } from "./eval/evaluate.ts";
-import type { Call, Policy, Score } from "./eval/types.ts";
+import type { Call, LiveContext, Policy, Score } from "./eval/types.ts";
 import { durationSeconds } from "./lint/duration.ts";
 import { buildRecord, recordedGroup, type DecisionRecord, type RecordInput } from "./record/record.ts";
 
@@ -21,13 +21,15 @@ export interface DecideInput extends Omit<RecordInput, "call" | "decision" | "po
   scores?: Record<string, Score>;
   /** The context registry; the session's live contexts at `ts` are the call's authority. None means no authority. */
   contexts?: ContextRegistry;
+  /** Further live contexts, e.g. a lease's observation context (LeaseRegistry.observation). */
+  extraContexts?: readonly LiveContext[];
 }
 
 export function decide(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput): DecisionRecord {
   const now = Date.parse(input.ts);
   if (Number.isNaN(now)) throw new Error(`decide: ts ${JSON.stringify(input.ts)} is not a timestamp`);
 
-  const live = input.contexts ? input.contexts.liveFor(input.session.id, now) : [];
+  const live: LiveContext[] = [...(input.contexts ? input.contexts.liveFor(input.session.id, now) : []), ...(input.extraContexts ?? [])];
   const decision = evaluate(policy, call, {
     ...(input.scores ? { scores: input.scores } : {}),
     contexts: live,
@@ -43,7 +45,7 @@ export function decide(policy: Policy, call: Call, ledger: CapLedger, input: Dec
   // Record the context the call ran under: the first live one covering its first placement's row.
   const firstRow = decision.placements[0]?.row;
   const used = firstRow ? live.find((c) => c.rows.includes(firstRow) || (policy.rowById.get(firstRow)?.authority?.serves ?? []).some((s: string) => c.rows.includes(s))) : undefined;
-  const { contexts: _registry, ...recordInput } = input;
+  const { contexts: _registry, extraContexts: _extra, ...recordInput } = input;
   const record = buildRecord({
     ...recordInput,
     ...(used && !input.context ? { context: { id: used.id, rows: [...used.rows] } } : {}),

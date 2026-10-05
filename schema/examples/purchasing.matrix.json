@@ -1,0 +1,111 @@
+{
+  "$schema": "../vaom-matrix-0.2.schema.json",
+  "format": "vaom.matrix/0.2",
+  "id": "example.procurement.mro",
+  "version": "1.0.0",
+  "title": "Delegated purchasing (VAOM v5 worked example 7E)",
+  "description": "A manufacturer delegates replenishment of maintenance, repair and operating supplies under a monthly mandate signed by the procurement manager: three framework suppliers, approved catalogue categories, EUR 2,500 per order, EUR 20,000 a month. Figures the whitepaper states are used as stated (those limits, the 0.93 threshold, twelve or so Band B purchases a week); the lower threshold, calibration record, catalogue category names and other oversight figures are illustrative. The monthly ceiling is modelled as a rolling 30-day window, where the paper's mandate runs to month end.",
+  "effective": { "from": "2026-10-01T00:00:00Z" },
+  "approval": { "role": "procurement-manager", "date": "2026-10-01", "ref": "placeholder://approvals/procurement-matrix-1.0.0" },
+
+  "roles": {
+    "procurement-manager": { "title": "Procurement manager" },
+    "procurement-deputy": { "title": "Deputy procurement manager" },
+    "head-of-operations": { "title": "Head of operations" }
+  },
+
+  "boundaries": {
+    "payment-mandate": {
+      "kind": "scope",
+      "intendedMechanism": "scope-denied",
+      "description": "Payment credentials are derived from the signed mandate; the merchant and card network refuse anything outside it (unlisted merchant, over the ceiling).",
+      "verification": { "probe": "Attempt a canary purchase from an unlisted merchant sandbox, and one above the ceiling.", "target": "placeholder://canary/merchant-sandbox", "every": "P30D", "alsoOn": ["credentials"] }
+    },
+    "no-supplier-admin-tool": {
+      "kind": "tool",
+      "intendedMechanism": "absent",
+      "description": "No supplier-onboarding or framework-terms tool is mounted for the agent.",
+      "verification": { "probe": "Attempt to onboard a supplier from inside the agent context.", "target": "placeholder://canary/erp-suppliers", "every": "P30D", "alsoOn": ["tool-manifest", "credentials"] }
+    }
+  },
+
+  "oversight": {
+    "fundedReviewerHoursPerWeek": 5,
+    "fundedBy": { "role": "head-of-operations", "date": "2026-10-01" },
+    "maxUtilization": 0.8,
+    "reviewerLevelMetrics": { "enabled": false }
+  },
+
+  "circuitBreakers": [
+    { "id": "non-delegable-touch", "condition": { "kind": "non-delegable-touch" }, "action": "suspend", "notify": ["procurement-manager"] },
+    { "id": "mandate-boundary-failed", "condition": { "kind": "boundary-verification-failed", "boundary": "payment-mandate" }, "action": "suspend", "notify": ["procurement-manager"] }
+  ],
+
+  "rows": [
+    {
+      "id": "purchase.reorder",
+      "title": "Re-order catalogue items within the mandate",
+      "description": "Execute & Audit within the monthly mandate; anything outside its constraints goes to review (Draft & Approve). An offer from a supplier whose price list is past its review-by date can't support Band A. The 0.93 threshold, EUR 2,500 per order and EUR 20,000 a month are as stated; the rest is illustrative.",
+      "pattern": "execute-and-audit",
+      "profile": { "reversibility": "partially-reversible", "consequenceScope": "internal-financial", "regulatoryExposure": "general-context", "confidenceMeasurability": "quantifiable", "accountabilityClarity": "clear-single-owner" },
+      "accountability": { "form": "single", "role": "procurement-manager", "deputy": "procurement-deputy", "accepted": { "role": "procurement-manager", "date": "2026-10-01" } },
+      "capabilities": ["shop:order.place"],
+      "requiresFacts": ["task"],
+      "authority": {
+        "kind": "delegable",
+        "routing": { "high": "A", "medium": "B", "low": "C" },
+        "confidence": {
+          "scoringPolicy": { "id": "reorder-gate", "version": "1.3" },
+          "thresholds": { "high": 0.93, "medium": 0.7 },
+          "calibration": { "errorTarget": 0.02, "confidenceLevel": 0.95, "sampleSize": 600, "sampleDate": "2026-09-15", "method": "learn-then-test" },
+          "verificationRequired": true
+        },
+        "reviewer": "procurement-manager",
+        "escalation": { "role": "head-of-operations", "sla": "P1D" },
+        "valueCeiling": { "limit": { "amount": "2500", "currency": "EUR" }, "fact": "total", "onExceed": "B" },
+        "cumulativeCaps": [
+          { "id": "mandate-monthly", "window": "P30D", "total": { "amount": "20000", "currency": "EUR" }, "fact": "total", "onBreach": "B" }
+        ],
+        "restrictions": [
+          { "id": "non-framework-supplier", "when": { "all": [ { "fact": "supplier", "op": "ne", "value": "supplier-a" }, { "fact": "supplier", "op": "ne", "value": "supplier-b" }, { "fact": "supplier", "op": "ne", "value": "supplier-c" } ] }, "band": "B", "reason": "Only the three framework suppliers are in the mandate." },
+          { "id": "unapproved-category", "when": { "all": [ { "fact": "category", "op": "ne", "value": "consumables" }, { "fact": "category", "op": "ne", "value": "cutting-fluids" }, { "fact": "category", "op": "ne", "value": "spare-parts" } ] }, "band": "B", "reason": "Only the approved catalogue categories are in the mandate." },
+          { "id": "stale-price-list", "when": { "fact": "price_list_current", "op": "eq", "value": false }, "band": "B", "reason": "An offer from a price list past its review-by date can't support a Band A decision." }
+        ],
+        "executionContext": { "maxLifetime": "P30D" }
+      },
+      "oversight": { "expectedPerWeek": { "A": 60, "B": 12, "C": 1 }, "reviewMinutes": 5, "escalationMinutes": 30, "auditSampleRate": 0.1, "auditMinutes": 5 }
+    },
+    {
+      "id": "price.anomaly",
+      "title": "Flag a price anomaly",
+      "pattern": "triage-and-route",
+      "profile": { "reversibility": "fully-reversible", "consequenceScope": "internal-operational", "regulatoryExposure": "none", "confidenceMeasurability": "partially-quantifiable", "accountabilityClarity": "clear-single-owner" },
+      "accountability": { "form": "single", "role": "procurement-manager", "deputy": "procurement-deputy", "accepted": { "role": "procurement-manager", "date": "2026-10-01" } },
+      "capabilities": ["shop:price.flag"],
+      "authority": {
+        "kind": "delegable",
+        "routing": { "high": "B", "medium": "B", "low": "C" },
+        "confidence": { "scoringPolicy": { "id": "price-anomaly", "version": "1.0" }, "thresholds": { "high": 0.9, "medium": 0.6 } },
+        "reviewer": "procurement-manager",
+        "escalation": { "role": "head-of-operations", "sla": "P1D" }
+      },
+      "oversight": { "expectedPerWeek": { "B": 4, "C": 1 }, "reviewMinutes": 10, "escalationMinutes": 30 }
+    },
+    {
+      "id": "supplier.manage",
+      "title": "Onboard suppliers or change framework terms",
+      "pattern": "prepare-and-present",
+      "profile": { "reversibility": "reversible-with-friction", "consequenceScope": "external-relational", "regulatoryExposure": "general-context", "confidenceMeasurability": "judgment-dependent", "accountabilityClarity": "clear-single-owner" },
+      "accountability": { "form": "single", "role": "procurement-manager", "deputy": "procurement-deputy", "accepted": { "role": "procurement-manager", "date": "2026-10-01" } },
+      "capabilities": ["erp:supplier.onboard", "erp:framework.amend"],
+      "authority": { "kind": "non-delegable", "reason": "Supplier onboarding and framework terms are contractual decisions.", "boundaries": ["no-supplier-admin-tool"] }
+    },
+    {
+      "id": "offers.read",
+      "title": "Compare supplier offers",
+      "accountability": { "form": "single", "role": "procurement-manager", "deputy": "procurement-deputy", "accepted": { "role": "procurement-manager", "date": "2026-10-01" } },
+      "capabilities": ["shop:offer.read"],
+      "authority": { "kind": "preparatory", "serves": ["purchase.reorder", "price.anomaly"], "effect": "read" }
+    }
+  ]
+}
