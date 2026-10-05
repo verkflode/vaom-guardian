@@ -31,7 +31,18 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
 
 - `packages/acs`: the **ACS wire adapter**, also pure (it imports only the core). It handles the handshake (declaring `on_decision_failure: "deny"`, HMAC-SHA256 only, human approvers only), per-session HMAC keys derived with HKDF, envelope signatures, replay protection (request ids and nonces, with a skew window), and the hash-chained audit trail that the `acs-audit` profile asks for. It translates between ACS steps and the core: `toolCallRequest` goes through `decide`; review and escalation become `ask`, with a deny on timeout; non-delegable becomes `deny`; unplaceable becomes `defer`, with a deny on timeout; `sessionStart` opens the execution context set by configuration; `subagentStart` derives an attenuated context; `toolCallResult` resolves the decision record. Requests are checked in a fixed order: envelope schema, version, signature, replay, session, payload, chain. Every failure is an error or a deny; methods it doesn't evaluate (wrapped protocols, memory and skill steps) are errors, never a default allow. A result showing that an `ask` executed without its approval is reported as an incident, and its output is withheld. Reasons go on the wire as codes only, never argument values. ACS v0.1 doesn't yet fix the HKDF parameters (ACS issues #118 and #11), so ours are provisional and stated in `src/hkdf.ts`. The vendored ACS schemas are in `packages/acs/vendor/acs-v0.1.2/`, unmodified, under their Apache-2.0 licence.
 
-Not built yet: the Guardian process (a local HTTP server, persistence, and an approval page with WebAuthn) and the host shims, starting with Claude Code. Where confidence scores come from is still open; with no scorer, every delegable call routes as low confidence.
+- `packages/guardian`: the **Guardian process**. It uses Node built-ins only, listens on 127.0.0.1, and never makes outbound connections (a source scan enforces this).
+  - **Persistence:** it serves the ACS endpoint and saves every decision record, chain entry and event to append-only JSONL files, synced to disk before it answers. If saving fails, the agent gets an error, which means deny.
+  - **Approvals:** reviews and escalations wait on a local approval page. Approving takes a WebAuthn assertion with user verification (Touch ID) from a credential enrolled for the approver role the decision names. The challenge commits to that one decision and its argument digest. Rejecting needs no credential. An ask past its timeout expires, which means deny.
+  - **Enrollment** takes a one-time link printed on the Guardian's terminal. Attestation isn't checked, because platform passkeys mostly send none.
+  - **Restart:** asks left pending by an unclean stop expire on restart, and a damaged history stops it from starting.
+  - **Verification:** `vaom-guardian verify` re-checks the evidence offline: record schemas, every session's hash chain, every approval's signature against the enrolled key with its challenge recomputed, and that every executed review or escalation has an approval for the same decision and role.
+
+  Try it: `node packages/guardian/src/cli.ts serve --config packages/guardian/examples/incident.guardian.json --enroll owner:head-of-engineering`, open the printed link to enroll, run `node packages/guardian/examples/demo-agent.ts`, and approve at `http://localhost:47100/`.
+
+  **Strength:** an agent running as the same OS user as the Guardian can read its data directory, including the shared secret, and could stop the Guardian or re-enroll. It can't produce a Touch ID assertion, and anything it does to the files shows up in `verify`, but this is policy strength, not isolation. Running the Guardian as a separate user is the stronger setup.
+
+Not built yet: the host shims, starting with Claude Code. Where confidence scores come from is still open; with no scorer, every delegable call routes as low confidence.
 
 ## Development
 

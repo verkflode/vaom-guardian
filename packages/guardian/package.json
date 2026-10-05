@@ -1,0 +1,18 @@
+{
+  "name": "@verkflode/vaom-guardian-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The VAOM Guardian process: the ACS endpoint over local HTTP, append-only evidence storage, and a local approval page where each approval takes a WebAuthn user-verified assertion. Node built-ins only.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "vaom-guardian": "./src/cli.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@verkflode/vaom-guardian-acs": "workspace:*",
+    "@verkflode/vaom-guardian-core": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  }
+}

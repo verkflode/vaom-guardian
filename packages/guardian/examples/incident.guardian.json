@@ -1,0 +1,11 @@
+{
+  "format": "vaom-guardian.config/0.1",
+  "matrix": "../../../schema/examples/incident.matrix.json",
+  "binding": "../../../schema/examples/incident.binding.json",
+  "dataDir": "../../../.guardian/incident",
+  "port": 47100,
+  "approvalTimeoutSeconds": 300,
+  "activation": {
+    "incident-agent": { "rows": ["remediation.restart"], "task": "INC-7" }
+  }
+}
