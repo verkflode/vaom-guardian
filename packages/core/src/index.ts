@@ -8,7 +8,7 @@ export type { Band, Call, CapUsage, CompileResult, Decision, EvalContext, FactVa
 export { buildRecord, checkRecord, resolveRecord, RecordError, RECORD_FORMAT } from "./record/record.ts";
 export type { DecisionRecord, RecordedFact, RecordInput, Resolution } from "./record/record.ts";
 export { canonicalize } from "./canonical/jcs.ts";
-export { sha256, hmacSha256, hex } from "./crypto/sha256.ts";
+export { sha256, hmacSha256, hex, utf8 } from "./crypto/sha256.ts";
 export { CapLedger } from "./caps/ledger.ts";
 export { decide, type DecideInput } from "./decide.ts";
 export { recordedGroup } from "./record/record.ts";

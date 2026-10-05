@@ -27,6 +27,12 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.3)(vite@8.3.2(@types/node@26.6.3)(esbuild@0.28.2))
 
+  packages/acs:
+    dependencies:
+      '@verkflode/vaom-guardian-core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/core: {}
 
 packages:

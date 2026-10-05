@@ -1,3 +1,5 @@
 # Generated: collapsed in GitHub diffs and excluded from language stats.
 packages/core/src/generated/** linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
+packages/acs/src/generated/** linguist-generated=true
+packages/acs/vendor/** linguist-vendored=true

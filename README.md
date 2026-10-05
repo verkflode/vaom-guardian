@@ -29,11 +29,13 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
 
 **VAOM v5's worked examples run end to end** (`packages/core/test/worked-examples.test.ts`): 7B AML triage, 7D autonomous incident remediation and 7E delegated purchasing, each with its own matrix and binding in `schema/examples/`. Every case quotes the whitepaper sentence it checks. Figures the paper doesn't state are illustrative in the example matrices, which say so. These double as candidate conformance vectors for ACS.
 
-The Guardian itself (the ACS wire and the host shims) is not built yet.
+- `packages/acs`: the **ACS wire adapter**, also pure (it imports only the core). It handles the handshake (declaring `on_decision_failure: "deny"`, HMAC-SHA256 only, human approvers only), per-session HMAC keys derived with HKDF, envelope signatures, replay protection (request ids and nonces, with a skew window), and the hash-chained audit trail that the `acs-audit` profile asks for. It translates between ACS steps and the core: `toolCallRequest` goes through `decide`; review and escalation become `ask`, with a deny on timeout; non-delegable becomes `deny`; unplaceable becomes `defer`, with a deny on timeout; `sessionStart` opens the execution context set by configuration; `subagentStart` derives an attenuated context; `toolCallResult` resolves the decision record. Requests are checked in a fixed order: envelope schema, version, signature, replay, session, payload, chain. Every failure is an error or a deny; methods it doesn't evaluate (wrapped protocols, memory and skill steps) are errors, never a default allow. A result showing that an `ask` executed without its approval is reported as an incident, and its output is withheld. Reasons go on the wire as codes only, never argument values. ACS v0.1 doesn't yet fix the HKDF parameters (ACS issues #118 and #11), so ours are provisional and stated in `src/hkdf.ts`. The vendored ACS schemas are in `packages/acs/vendor/acs-v0.1.2/`, unmodified, under their Apache-2.0 licence.
+
+Not built yet: the Guardian process (a local HTTP server, persistence, and an approval page with WebAuthn) and the host shims, starting with Claude Code. Where confidence scores come from is still open; with no scorer, every delegable call routes as low confidence.
 
 ## Development
 
-Requires Node 22+ and pnpm. `pnpm install`, then `pnpm test` (core tests and schema tests) and `pnpm typecheck`. After changing a schema, run `pnpm gen:validators`; a test fails if the committed validators are stale.
+Requires Node 22+ and pnpm. `pnpm install`, then `pnpm test` (package tests and schema tests) and `pnpm typecheck`. After changing a schema, run `pnpm gen:validators`; a test fails if the committed validators are stale.
 
 ## License
 
