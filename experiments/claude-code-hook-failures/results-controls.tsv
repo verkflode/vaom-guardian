@@ -1,0 +1,9 @@
+scenario	mode	hook_ran	canary	denials
+noop	manual	yes	absent	1
+noop	manual+allowrule	yes	absent	1
+noop	auto	yes	absent	1
+noop	bypassPermissions	yes	CREATED	0
+nohook	manual	no	absent	1
+nohook	manual+allowrule	no	absent	1
+nohook	auto	no	absent	1
+nohook	bypassPermissions	no	CREATED	0

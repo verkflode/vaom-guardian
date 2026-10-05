@@ -1,0 +1,11 @@
+scenario	mode	hook_ran	canary	denials
+nohook	default+cliallow	no	CREATED	0
+noop	default+cliallow	yes	CREATED	0
+control-deny	default+cliallow	yes	absent	1
+exit2	default+cliallow	yes	absent	1
+exit1-silent	default+cliallow	yes	CREATED	0
+exit1-garbage	default+cliallow	yes	CREATED	0
+exit0-garbage	default+cliallow	yes	CREATED	0
+crash	default+cliallow	yes	CREATED	0
+timeout	default+cliallow	yes	CREATED	0
+missing	default+cliallow	no	CREATED	0
