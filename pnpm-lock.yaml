@@ -33,6 +33,15 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/claude-code:
+    dependencies:
+      '@verkflode/vaom-guardian-acs':
+        specifier: workspace:*
+        version: link:../acs
+      '@verkflode/vaom-guardian-server':
+        specifier: workspace:*
+        version: link:../guardian
+
   packages/core: {}
 
   packages/guardian:

@@ -1,7 +1,7 @@
 // The Guardian's HTTP surface, bound to 127.0.0.1 only.
 //
 //   POST /acs                          ACS JSON-RPC (signed envelopes; see packages/acs)
-//   GET  /v1/asks/{session}/{request}  approval status for the shim, long-polled (?wait=seconds), HMAC-authenticated
+//   GET  /v1/asks/{session}/{request}  approval status for the shim, long-polled (?wait=seconds), HMAC-authenticated both ways
 //   GET  /                             the approval page; /app.js its script
 //   GET  /enroll                       credential enrollment page (needs the token from the terminal)
 //   /api/...                           JSON for those pages
@@ -21,7 +21,8 @@ const MAX_BODY = 1 << 20;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHIM_SKEW_MS = 30_000;
 
-/** The shim's request authentication: HMAC-SHA256 under the session key over "GET {path} {timestamp}". */
+/** The shim's request authentication: HMAC-SHA256 under the session key over "GET {path} {timestamp}". The
+ *  answer is signed the same way over "STATUS {path} {status} {timestamp}", with the request's timestamp. */
 export function shimSignature(ikm: Uint8Array, session: string, method: string, path: string, ts: string): string {
   return createHmac("sha256", sessionKey(ikm, session)).update(`${method} ${path} ${ts}`).digest("base64");
 }
@@ -96,7 +97,9 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
       g.approvals.expire(now());
       const status = wait > 0 ? await g.approvals.wait(session, requestId, wait * 1000) : g.approvals.get(session, requestId)?.status;
       if (!status) throw new HttpError(404, "no such approval request");
-      return json(res, 200, { status });
+      // Signed back over the request's own timestamp, so the shim acts only on a status this Guardian gave
+      // for this request, never on whatever else might be listening on the port.
+      return json(res, 200, { status, signature: shimSignature(g.secrets.ikm, session, "STATUS", `${p} ${status}`, ts) });
     }
 
     // ---- browser-facing

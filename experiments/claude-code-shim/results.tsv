@@ -1,0 +1,6 @@
+deny-bash	denied	no	Bash:unplaceable/not-executed	1
+allow-telemetry	ran	yes	mcp__telemetry__query:allow/executed	0
+ask-expires	denied	no	mcp__deploy__rolling_restart:escalate/expired	1
+bypass	denied	no	none	2
+bypass-disabled	ran	yes	mcp__telemetry__query:allow/executed	0
+guardian-down	denied	no	none	1
