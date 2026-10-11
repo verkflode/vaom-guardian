@@ -30,4 +30,13 @@ Raw rows are in `results.tsv`. `vaom-guardian verify` reports no problems for an
 2. **`disableBypassPermissionsMode` takes effect from project settings.** With it set, Claude Code ran in its normal mode even though bypass was requested, so the Guardian decided as usual. Without it, the shim denied every call, including the schema lookup. The settings guard also covers the case the shim can't: a shim that can't run at all while bypass is on.
 3. **Claude Code calls a host-internal tool, `ToolSearch`, before the first use of an MCP tool.** In the first round of runs the shim sent it to the Guardian, where it was unmapped and denied. In the escalation scenario the model then gave up before ever reaching the governed call. `ToolSearch` only loads a tool's schema into the agent's context. ACS's `toolCallRequest` covers "every action that escapes the agent's reasoning context", so the shim now answers it `allow` itself and keeps no record of it. The tool it loads still needs its own decision. The table above is from the second round.
 
-Not covered here: an approval given with a real Touch ID. That needs a person at the approval page. The shim's tests cover the approval path with a software authenticator.
+## With a person and Touch ID
+
+Run by hand on 2026-10-11, the same way as above but with a 5-minute approval window. Before the run, a passkey was enrolled in **Safari** for `head-of-engineering`. Claude Code asked for the rolling restart, and the hook held the call while a person reviewed it on the approval page and approved it with Touch ID.
+
+- The restart ran once, with no denials. The whole run took 34.7 s, of which the review took 30.8 s.
+- The decision record shows an escalation, executed, with the approval attached (`head-of-engineering`, `owner`).
+- The assertion carries both user presence and user verification, and its origin is `http://localhost:47190`. **Safari allows WebAuthn on `http://localhost`.**
+- `vaom-guardian verify` reports no problems: 1 record, 1 approval, its signature re-checked against the enrolled key.
+
+Only Safari was tried. No Gecko-based browser was available.
