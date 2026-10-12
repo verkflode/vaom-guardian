@@ -63,6 +63,20 @@ export interface Handled {
   /** Chain entries to persist, in order. */
   entries: ContextEntry[];
   incidents: Incident[];
+  /** Every sub-agent spawn decided, allowed or denied: the evidence for chain integrity (scorecard metric 12). */
+  spawns: Spawn[];
+}
+
+export interface Spawn {
+  session: string;
+  subagent_session: string;
+  agent: string;
+  subagent_type?: string;
+  decision: "allow" | "deny";
+  /** The ACS reason code: context_derived, authority_breach (depth, fan-out or count), outside_allowed_patterns, or a request fault. */
+  reason: string;
+  context?: string;
+  why?: string;
 }
 
 interface Session {
@@ -93,7 +107,7 @@ export class AcsEndpoint {
   }
 
   handle(raw: string | unknown, now: number): Handled {
-    const out: Handled = { response: null, records: [], entries: [], incidents: [] };
+    const out: Handled = { response: null, records: [], entries: [], incidents: [], spawns: [] };
     let id: string | number | null = null;
     try {
       let env: Json;
@@ -157,7 +171,7 @@ export class AcsEndpoint {
         this.deps.ledger.release(r.id);
         if (r.request.wire?.request_id) this.pending.delete(`${r.request.session.id} ${r.request.wire.request_id}`);
       }
-      return { response: { jsonrpc: "2.0", id, error: { code: err.code, message: err.message, data: err.data } }, records: [], entries: out.entries, incidents: out.incidents };
+      return { response: { jsonrpc: "2.0", id, error: { code: err.code, message: err.message, data: err.data } }, records: [], entries: out.entries, incidents: out.incidents, spawns: out.spawns };
     }
   }
 
@@ -306,15 +320,19 @@ const STEPS: Record<string, Step> = {
       const pl = i.p.payload;
       const parent = deps.contexts.liveFor(pl.parent_session_id, i.now)[0];
       const type: string | undefined = pl.subagent_descriptor?.agent_name;
-      if (pl.parent_session_id !== i.sid) return { decision: "deny", reason_codes: ["parent_session_mismatch"], reasoning: "A sub-agent can only be started from its own parent session." };
-      if (!parent) return { decision: "deny", reason_codes: ["no_parent_context"], reasoning: "The parent session has no live execution context to derive from." };
-      if (!type) return { decision: "deny", reason_codes: ["subagent_type_unknown"], reasoning: "A sub-agent must name its type (subagent_descriptor.agent_name)." };
-      const agentId: string = pl.subagent_descriptor?.agent_id ?? `${i.s.agentId}/${type}`;
+      const agentId: string = pl.subagent_descriptor?.agent_id ?? `${i.s.agentId}/${type ?? "unknown"}`;
+      const answer = (decision: "allow" | "deny", reason: string, extra: { context?: string; why?: string; policy_data?: Json; reasoning?: string } = {}) => {
+        i.out.spawns.push({ session: i.sid, subagent_session: String(pl.subagent_session_id), agent: agentId, ...(type ? { subagent_type: type } : {}), decision, reason, ...(extra.context ? { context: extra.context } : {}), ...(extra.why ? { why: extra.why } : {}) });
+        return { decision, reason_codes: [reason], ...(extra.reasoning ? { reasoning: extra.reasoning } : {}), ...(extra.policy_data ? { policy_data: extra.policy_data } : {}) };
+      };
+      if (pl.parent_session_id !== i.sid) return answer("deny", "parent_session_mismatch", { reasoning: "A sub-agent can only be started from its own parent session." });
+      if (!parent) return answer("deny", "no_parent_context", { reasoning: "The parent session has no live execution context to derive from." });
+      if (!type) return answer("deny", "subagent_type_unknown", { reasoning: "A sub-agent must name its type (subagent_descriptor.agent_name)." });
       const r = deps.contexts.derive(parent.id, { id: deps.newId(), session: pl.subagent_session_id, agent: { id: agentId }, rows: [...parent.rows], subagentType: type }, i.now);
-      if (r.ok) return { decision: "allow", reason_codes: ["context_derived"], policy_data: { context_id: r.context.id, context_expires_at: new Date(r.context.expiresAt).toISOString() } };
+      if (r.ok) return answer("allow", "context_derived", { context: r.context.id, policy_data: { context_id: r.context.id, context_expires_at: new Date(r.context.expiresAt).toISOString() } });
       // An escalation needs a human to widen the pattern in the matrix; there's no per-spawn approval path,
       // so it's denied here and reported as such.
-      return { decision: "deny", reason_codes: [r.outcome === "refuse" ? "authority_breach" : "outside_allowed_patterns"], reasoning: r.reason };
+      return answer("deny", r.outcome === "refuse" ? "authority_breach" : "outside_allowed_patterns", { why: r.reason, reasoning: r.reason });
     },
   },
 };

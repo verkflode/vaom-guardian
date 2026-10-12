@@ -43,7 +43,8 @@ if (command === "scorecard") {
   const store = new Store(config.dataDir);
   const seeds = store.events().filter((e) => e.type === "seed-outcome").map((e) => ({ row: e.row as string, ts: e.ts, result: e.result as "detected" | "missed" | "expired" }));
   const probes = store.events().filter((e) => e.type === "probe-result").map((e) => e.result as ProbeResult);
-  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), store.records(), { from, to, seeds, probes });
+  const spawns = store.events().filter((e) => e.type === "spawn").map((e) => ({ ts: e.ts, decision: e.decision as "allow" | "deny", reason: e.reason as string, agent: e.agent as string }));
+  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), store.records(), { from, to, seeds, probes, spawns });
   if (values.json) { console.log(JSON.stringify(s, null, 2)); process.exit(0); }
   const line = (name: string, m: Metric) => console.log(`  ${(m.status === "breach" ? "BREACH" : m.status).padEnd(19)}  ${name}${m.diagnosis ? `: ${m.diagnosis}` : ""}`);
   console.log(`Scorecard for ${s.matrix.id}@${s.matrix.version}, ${s.period.from} to ${s.period.to}: ${s.records} records`);

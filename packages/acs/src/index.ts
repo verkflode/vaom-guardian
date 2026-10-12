@@ -8,4 +8,4 @@ export { ReplayGuard } from "./replay.ts";
 export { Chain, entryHash, requestHash, verifyChain, type ContextEntry, type EntryFields } from "./chain.ts";
 export { negotiate, PROFILES, type GuardianConfig } from "./handshake.ts";
 export { toCall, toResult, type ResultInput, type ResultOptions } from "./translate.ts";
-export { AcsEndpoint, OBSERVED_STEPS, type EndpointConfig, type EndpointDeps, type Handled, type Incident } from "./endpoint.ts";
+export { AcsEndpoint, OBSERVED_STEPS, type EndpointConfig, type EndpointDeps, type Handled, type Incident, type Spawn } from "./endpoint.ts";

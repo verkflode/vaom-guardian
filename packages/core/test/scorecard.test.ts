@@ -44,7 +44,6 @@ describe("the scorecard's shape", () => {
     expect(s.rows.map((r) => r.row)).toEqual(["invoice.approve", "invoice.duplicate-anomaly"]);
     const m = row(s).metrics;
     for (const k of ["bandAErrorRate", "staleKnowledgeShare", "seededDetection"]) expect(m[k]!.status).toBe("not-measured");
-    expect(s.workflow.chainIntegrity!.status).toBe("not-measured");
     // The invoice matrix relies on a boundary nobody has probed: it counts at policy strength, a breach.
     expect(s.workflow.boundaryVerification).toMatchObject({ status: "breach", boundaries: { "no-contract-write": { status: "unverified", creditedAs: "policy" } } });
   });
@@ -134,6 +133,21 @@ describe("enforcement health", () => {
     const a = scorecard(matrix02(), rs, period).agents;
     expect(a["ap-agent"]).toMatchObject({ status: "no-target", calls: 20, scopeDenials: 1, rate: 0.05 });
     expect(a.intruder).toMatchObject({ status: "insufficient-sample", calls: 1, scopeDenials: 1 });
+  });
+});
+
+describe("chain integrity (metric 12)", () => {
+  const sp = (decision: "allow" | "deny", reason: string, ts = "2026-10-06T09:00:00Z") => ({ ts, decision, reason });
+  it("no spawn outside the envelope: healthy, even with malformed requests", () => {
+    const m = scorecard(matrix02(), [], { ...period, spawns: [sp("allow", "context_derived"), sp("deny", "parent_session_mismatch")] }).workflow.chainIntegrity;
+    expect(m).toMatchObject({ status: "healthy", spawns: 2, allowed: 1, authorityBreaches: 0, outsidePatterns: 0, requestFaults: 1 });
+  });
+  it("a spawn past the limits or outside the patterns, though denied, is a breach: the attempt is the signal", () => {
+    expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "authority_breach")] }).workflow.chainIntegrity).toMatchObject({ status: "breach", authorityBreaches: 1 });
+    expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "outside_allowed_patterns")] }).workflow.chainIntegrity).toMatchObject({ status: "breach", outsidePatterns: 1 });
+  });
+  it("only spawns inside the period count", () => {
+    expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "authority_breach", "2026-10-01T00:00:00Z")] }).workflow.chainIntegrity!.status).toBe("healthy");
   });
 });
 

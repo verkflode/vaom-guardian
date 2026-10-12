@@ -58,6 +58,16 @@ export interface ScorecardOptions {
   seedMinSample?: number;
   /** Boundary probe results on record. Boundaries are judged as of the end of the period. */
   probes?: readonly ProbeResult[];
+  /** Sub-agent spawn decisions on record, allowed and denied. */
+  spawns?: readonly SpawnOutcome[];
+}
+
+export interface SpawnOutcome {
+  ts: string;
+  decision: "allow" | "deny";
+  /** context_derived; authority_breach (past the matrix's depth, fan-out or count); outside_allowed_patterns; or a request fault. */
+  reason: string;
+  agent?: string;
 }
 
 export interface SeedOutcome {
@@ -94,7 +104,7 @@ export function scorecard(matrix: Validated, records: readonly DecisionRecord[],
     rows,
     workflow: {
       oversightLoad: oversightLoad(matrix, inPeriod, weeks),
-      chainIntegrity: { status: "not-measured", note: "refused spawns aren't in decision records yet" },
+      chainIntegrity: chainIntegrity((opts.spawns ?? []).filter((s) => { const t = Date.parse(s.ts); return t >= from && t < to; })),
       boundaryVerification: boundaryVerification(matrix, opts.probes ?? [], to),
     },
     agents: scopeDenials(inPeriod, minSample),
@@ -228,6 +238,22 @@ function reviewEngagement(row: Validated, records: readonly DecisionRecord[], mi
     approvalThreshold: PAPER_DEFAULTS.maxApprovalShare, ...(minPlausibleSeconds !== undefined ? { minPlausibleReviewSeconds: minPlausibleSeconds } : {}),
     note: "aggregated per row; the approval threshold is the paper's default; modifications aren't recorded, only approvals and rejections",
     ...(diagnosis ? { diagnosis } : {}),
+  };
+}
+
+/** 12. Chain integrity: no spawn outside the matrix's patterns, depth, fan-out or counts. The Guardian
+ *  denies those spawns, so what's measured is the attempt: the delegation trying to leave its envelope. */
+function chainIntegrity(spawns: readonly SpawnOutcome[]): Metric {
+  const allowed = spawns.filter((s) => s.decision === "allow").length;
+  const breaches = spawns.filter((s) => s.decision === "deny" && s.reason === "authority_breach").length;
+  const outside = spawns.filter((s) => s.decision === "deny" && s.reason === "outside_allowed_patterns").length;
+  const faults = spawns.filter((s) => s.decision === "deny").length - breaches - outside;
+  const values = { spawns: spawns.length, allowed, authorityBreaches: breaches, outsidePatterns: outside, requestFaults: faults };
+  if (breaches + outside === 0) return { status: "healthy", ...values, note: "every spawn stayed inside the matrix's patterns and limits, or was a malformed request" };
+  return {
+    status: "breach", ...values,
+    diagnosis: "dynamic delegation operating outside its designed envelope (every such spawn was denied)",
+    note: "an attempt past depth, fan-out or count, or of a type no pattern allows; all were denied, so this is the attempt, not a breach that got through",
   };
 }
 

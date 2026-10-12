@@ -139,6 +139,17 @@ describe("a review approved with WebAuthn, end to end", () => {
   });
 });
 
+describe("spawns are evidence", () => {
+  it("stores every sub-agent spawn decision as an event", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const spawn = (type: string, sub: string) => call("steps/subagentStart", { subagent_session_id: sub, parent_session_id: S1, parent_step_id: uuid(), intent_derivation: "inherit_subset", subagent_descriptor: { agent_name: type } });
+    expect((await spawn("log-analysis", "22222222-2222-4222-8222-222222222222")).result.decision).toBe("allow");
+    expect((await spawn("shell", "33333333-3333-4333-8333-333333333333")).result.decision).toBe("deny");
+    expect(g.store.events().filter((e) => e.type === "spawn").map((e) => [e.type, e.decision, e.reason])).toEqual([["spawn", "allow", "context_derived"], ["spawn", "deny", "outside_allowed_patterns"]]);
+  });
+});
+
 describe("who approved is recorded only when the matrix enables reviewer-level metrics", () => {
   async function approvedOnce(extra: Record<string, unknown> = {}) {
     const { g, port } = await start(undefined, extra);

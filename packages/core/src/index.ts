@@ -18,5 +18,5 @@ export { recordedGroup, recordFact } from "./record/record.ts";
 export { ContextRegistry, DEFAULT_CONTEXT_LIFETIME, type Context, type ContextSpec, type DeriveResult } from "./authority/contexts.ts";
 export { LeaseRegistry, type Health, type Lease } from "./authority/leases.ts";
 export type { LiveContext } from "./eval/types.ts";
-export { scorecard, SCORECARD_FORMAT, PAPER_DEFAULTS, type Metric, type RowScorecard, type Scorecard, type ScorecardOptions, type SeedOutcome, type Status } from "./scorecard/scorecard.ts";
+export { scorecard, SCORECARD_FORMAT, PAPER_DEFAULTS, type Metric, type RowScorecard, type Scorecard, type ScorecardOptions, type SeedOutcome, type SpawnOutcome, type Status } from "./scorecard/scorecard.ts";
 export { assessBoundaries, checkProbeResult, classify, lintProbes, toolMatches, PROBES_FORMAT, PROBE_RESULT_FORMAT, type BoundaryAssessment, type BoundaryStatus, type Mechanism, type Observed, type ProbeResult } from "./boundaries/probes.ts";

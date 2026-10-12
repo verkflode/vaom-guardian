@@ -291,6 +291,14 @@ describe("sub-agents (7D: two read-only sub-agents, depth one)", () => {
     expect(spawn(s, "dependency-check", "44444444-4444-4444-8444-444444444444").result.decision).toBe("allow");
     expect(spawn(s, "log-analysis", "55555555-5555-4555-8555-555555555555").result).toMatchObject({ decision: "deny", reason_codes: ["authority_breach"] });
   });
+  it("reports every spawn decision, allowed or denied, as evidence for chain integrity", () => {
+    const s = started();
+    expect(spawn(s, "log-analysis").spawns).toEqual([{ session: S1, subagent_session: SUB, agent: `${AGENT}/log-analysis`, subagent_type: "log-analysis", decision: "allow", reason: "context_derived", context: expect.any(String) }]);
+    expect(spawn(s, "shell", "33333333-3333-4333-8333-333333333333").spawns).toMatchObject([{ subagent_type: "shell", decision: "deny", reason: "outside_allowed_patterns", why: expect.any(String) }]);
+    spawn(s, "dependency-check", "44444444-4444-4444-8444-444444444444");
+    expect(spawn(s, "log-analysis", "55555555-5555-4555-8555-555555555555").spawns).toMatchObject([{ decision: "deny", reason: "authority_breach" }]);
+    expect(send(s, "steps/toolCallRequest", restart("INC-7")).spawns).toEqual([]);
+  });
   it("denies a spawn from one session that names another live session as parent", () => {
     const s = started();
     const S3 = "77777777-7777-4777-8777-777777777777";

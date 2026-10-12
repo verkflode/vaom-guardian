@@ -158,7 +158,10 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
       g.store.appendRecords(h.records);
       g.store.appendChain(h.entries.map((entry) => ({ session, entry })));
       const ts = new Date(t).toISOString();
-      g.store.appendEvents(h.incidents.map((i) => ({ type: "incident", id: crypto.randomUUID(), ts, ...i })));
+      g.store.appendEvents([
+        ...h.incidents.map((i) => ({ type: "incident", id: crypto.randomUUID(), ts, ...i })),
+        ...h.spawns.map((s) => ({ type: "spawn", id: crypto.randomUUID(), ts, ...s })),
+      ]);
     } catch {
       return g.endpoint.persistFailed(h, session);
     }
