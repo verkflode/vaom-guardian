@@ -52,6 +52,16 @@ export function verifyEvidence(store: Store, origin: string, rpId = "localhost")
     approvals.set(e.id, { decision: e.decision as string, role: e.approver_role as string });
   }
   for (const r of records) if (seeds.has(r.id)) problems.push(`record ${r.id}: a planted case became a decision record`);
+  // Every seed outcome belongs to a planted seed, once: an outcome with no planting, or a second outcome for
+  // the same seed, would skew the detection rate.
+  const decided = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "seed-outcome") continue;
+    const d = e.decision as string;
+    if (!seeds.has(d)) problems.push(`seed outcome ${e.id}: no planted seed ${d}`);
+    else if (decided.has(d)) problems.push(`seed outcome ${e.id}: seed ${d} already has an outcome`);
+    decided.add(d);
+  }
 
   for (const r of records) {
     const o = r.decision.outcome;

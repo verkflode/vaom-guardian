@@ -24,6 +24,7 @@ const verified = { "erp:invoice.approve": true };
 function ctx(over: Partial<EvalContext> & { usage?: Record<string, CapUsage | null> } = {}): EvalContext {
   const usage = over.usage ?? {};
   return {
+    now: over.now ?? Date.parse("2026-10-06T09:00:00Z"),
     history: over.history ?? familiar,
     verifications: over.verifications ?? verified,
     contexts: over.contexts ?? [{ id: "ctx-1", rows: ["invoice.approve", "invoice.duplicate-anomaly"] }],
@@ -99,6 +100,31 @@ describe("the worked example: invoice of EUR 3,200", () => {
     const at = (high: number) => { const m = matrix02(); m.rows[0].authority.confidence.thresholds.high = high; return compile(m); };
     expect(evaluate(at(0.875), approve("3200"), ctx({ history: unfamiliar })).band).toBe("A");
     expect(evaluate(at(0.8751), approve("3200"), ctx({ history: unfamiliar })).band).toBe("B");
+  });
+});
+
+describe("the matrix grants nothing outside its effective window", () => {
+  // The invoice matrix takes effect at 2026-10-01T00:00:00Z and states no end.
+  const p = compile();
+  it("before it takes effect: unplaceable", () => {
+    const d = evaluate(p, approve("3200"), ctx({ now: Date.parse("2026-09-30T23:59:59Z") }));
+    expect(d.outcome).toBe("unplaceable");
+    expect(codes(d)).toEqual(["matrix.not-in-effect"]);
+    expect(evaluate(p, approve("3200"), ctx({ now: Date.parse("2026-10-01T00:00:00Z") })).band).toBe("A");
+  });
+  it("from its end on: unplaceable, the end itself included", () => {
+    const m = matrix02(); m.effective.until = "2026-11-01T00:00:00Z";
+    const pp = compile(m);
+    expect(evaluate(pp, approve("3200"), ctx({ now: Date.parse("2026-10-31T23:59:59Z") })).band).toBe("A");
+    const d = evaluate(pp, approve("3200"), ctx({ now: Date.parse("2026-11-01T00:00:00Z") }));
+    expect([d.outcome, codes(d)]).toEqual(["unplaceable", ["matrix.expired"]]);
+  });
+  it("with no valid clock, nothing is placed", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY]) expect(codes(evaluate(p, approve("3200"), ctx({ now })))).toEqual(["clock.unknown"]);
+  });
+  it("applies to preparatory and non-delegable calls too", () => {
+    const read = { tool: "mcp__erp__get_invoice", arguments: { invoice_id: "INV-1" } };
+    expect(evaluate(p, read, ctx({ now: Date.parse("2026-09-01T00:00:00Z") })).outcome).toBe("unplaceable");
   });
 });
 

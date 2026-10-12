@@ -39,13 +39,24 @@ describe("the parallel-split attack", () => {
     const ledger = fresh();
     const naive = async (id: string) => {
       const ts = "2026-10-02T09:00:00Z", now = Date.parse(ts);
-      const d = evaluate(policy, approve("3000", "V-7", id), { verifications, contexts: [{ id: "c", rows: ["invoice.approve"] }], capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
+      const d = evaluate(policy, approve("3000", "V-7", id), { now, verifications, contexts: [{ id: "c", rows: ["invoice.approve"] }], capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
       await tick(); // e.g. awaiting a database write
       ledger.reserve({ id, request: { ts }, decision: { placements: [] }, reservations: d.reservations.map((r) => ({ cap: r.capId, row: r.row, group: r.groupKey, amount: r.amount!, count: 1 })) } as unknown as DecisionRecord);
       return d;
     };
     const [a, b] = await Promise.all([naive("N-1"), naive("N-2")]);
     expect([a.band, b.band]).toEqual(["A", "A"]);
+  });
+});
+
+describe("decide() judges the matrix's window at the call's own time", () => {
+  it("a call stamped before the matrix takes effect is unplaceable, and reserves nothing", () => {
+    const ledger = fresh();
+    const r = decide(policy, approve("100"), ledger, inputAt("2026-09-30T12:00:00Z"));
+    expect(r.decision.outcome).toBe("unplaceable");
+    expect(r.decision.reasons.map((x) => x.code)).toEqual(["matrix.not-in-effect"]);
+    expect(r.reservations).toEqual([]);
+    expect(decide(policy, approve("100"), ledger, inputAt("2026-10-02T12:00:00Z")).decision.outcome).toBe("allow");
   });
 });
 

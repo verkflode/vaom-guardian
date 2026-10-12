@@ -149,14 +149,14 @@ function rowScorecard(row: Validated, records: readonly DecisionRecord[], minSam
   };
 
   // 4. Dimension correlation with the composite.
-  metrics.dimensionCorrelation = dimensionCorrelation(banded, enough, short);
+  metrics.dimensionCorrelation = dimensionCorrelation(banded, minSample);
 
   // 5. Verifier effectiveness: disagreement only; the catch rate needs a labelled challenge set.
   const judged = banded.filter((x) => x.placement.score?.verified !== undefined);
   if (judged.length === 0) metrics.verifierEffectiveness = { status: "not-measured", note: "no verifier verdicts recorded" };
   else {
     const disagreement = judged.filter((x) => x.placement.score!.verified === false).length / judged.length;
-    metrics.verifierEffectiveness = judged.length < minSample ? { ...short, disagreement } : {
+    metrics.verifierEffectiveness = judged.length < minSample ? { status: "insufficient-sample", disagreement, note: `${judged.length} decisions with a verifier verdict; at least ${minSample} needed for a verdict` } : {
       status: disagreement === 0 ? "breach" : "healthy", disagreement,
       note: "disagreement only; the catch rate needs a labelled challenge set",
       ...(disagreement === 0 ? { diagnosis: "verification theater" } : {}),
@@ -196,10 +196,11 @@ function seededDetection(seeding: Validated, seeds: readonly SeedOutcome[], seed
   };
 }
 
-function dimensionCorrelation(banded: Placed[], enough: boolean, short: Metric): Metric {
+function dimensionCorrelation(banded: Placed[], minSample: number): Metric {
   const scored = banded.filter((x) => x.placement.score);
   if (scored.length === 0) return { status: "not-measured", note: "no scored decisions" };
-  if (!enough || scored.length < 3) return { ...short };
+  const need = Math.max(3, minSample);
+  if (scored.length < need) return { status: "insufficient-sample", note: `${scored.length} scored decisions; at least ${need} needed for a verdict` };
   const dims = new Set(scored.flatMap((x) => Object.keys(x.placement.score!.dimensions)));
   const correlations: Record<string, number | null> = {};
   const constant: string[] = [];
@@ -249,6 +250,7 @@ function chainIntegrity(spawns: readonly SpawnOutcome[]): Metric {
   const outside = spawns.filter((s) => s.decision === "deny" && s.reason === "outside_allowed_patterns").length;
   const faults = spawns.filter((s) => s.decision === "deny").length - breaches - outside;
   const values = { spawns: spawns.length, allowed, authorityBreaches: breaches, outsidePatterns: outside, requestFaults: faults };
+  if (spawns.length === 0) return { status: "healthy", ...values, note: "no spawn was attempted in the period" };
   if (breaches + outside === 0) return { status: "healthy", ...values, note: "every spawn stayed inside the matrix's patterns and limits, or was a malformed request" };
   return {
     status: "breach", ...values,

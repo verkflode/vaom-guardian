@@ -47,6 +47,9 @@ export interface CapUsage {
 }
 
 export interface EvalContext {
+  /** The time of the call, in ms since the epoch. A matrix grants nothing outside its effective window, so
+   *  the evaluator can't decide without the clock; a non-finite value makes every call unplaceable. */
+  now: number;
   /** Decision history for anomaly signals. Absent: history can't be read, so every signal fires. */
   history?: History;
   /** An independent verifier's verdict per capability (VAOM v5 Section 8). Rows with verificationRequired

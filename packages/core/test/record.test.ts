@@ -10,6 +10,7 @@ const policy: Policy = (() => {
 })();
 const key = new Uint8Array(32).fill(7);
 const ctx = (usage: Record<string, { total?: string; count: number }> = {}): EvalContext => ({
+  now: Date.parse("2026-10-02T10:00:00Z"),
   verifications: { "erp:invoice.approve": true },
   contexts: [{ id: "ctx-1", rows: ["invoice.approve"] }],
   capUsage: (_r, c, g) => usage[`${c} ${g}`] ?? { total: "0", count: 0 },

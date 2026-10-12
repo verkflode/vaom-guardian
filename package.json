@@ -10,7 +10,7 @@
     "gen:validators": "node scripts/gen-validators.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && pnpm test:schema",
-    "test:schema": "node schema/test/run.mjs && node schema/test/run-binding.mjs"
+    "test:schema": "node schema/test/run.mjs && node schema/test/run-binding.mjs && node schema/test/no-duplicate-keys.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

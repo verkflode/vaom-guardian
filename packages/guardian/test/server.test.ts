@@ -464,6 +464,17 @@ describe("seeded cases (VAOM v5 Readiness Condition 6)", () => {
     expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n")).toMatch(/planted case became a decision record/);
   });
 
+  it("verify flags a seed outcome with no planted seed, and a second outcome for one seed", async () => {
+    const { g, port, seed } = await queued();
+    await http(port, "POST", `/api/asks/${seed.session}/${seed.request_id}/reject`, { origin: origin(port), body: {} });
+    const outcome = g.store.events().find((e) => e.type === "seed-outcome")!;
+    expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems).toEqual([]);
+    g.store.appendEvents([{ ...outcome, id: "forged-1", decision: "not-a-seed" }, { ...outcome, id: "forged-2" }]);
+    const problems = verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n");
+    expect(problems).toMatch(/seed outcome forged-1: no planted seed/);
+    expect(problems).toMatch(/seed outcome forged-2: seed .* already has an outcome/);
+  });
+
   it("an undecided seed expires, and counts neither way", async () => {
     const { g, seed } = await queued();
     g.approvals.expire(Date.now() + 3_600_000);

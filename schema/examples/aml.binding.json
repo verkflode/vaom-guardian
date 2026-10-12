@@ -38,7 +38,6 @@
         "facts": {
           "task": { "arg": "/alert_id" },
           "pattern": { "arg": "/pattern" },
-        "pattern": { "arg": "/pattern" },
           "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
           "pep": { "arg": "/pep" },
           "sanctioned": { "arg": "/sanctioned_jurisdiction" }

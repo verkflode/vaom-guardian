@@ -138,6 +138,9 @@ describe("enforcement health", () => {
 
 describe("chain integrity (metric 12)", () => {
   const sp = (decision: "allow" | "deny", reason: string, ts = "2026-10-06T09:00:00Z") => ({ ts, decision, reason });
+  it("no spawns at all: healthy, and the note says nothing was attempted", () => {
+    expect(scorecard(matrix02(), [], { ...period, spawns: [] }).workflow.chainIntegrity).toMatchObject({ status: "healthy", spawns: 0, note: "no spawn was attempted in the period" });
+  });
   it("no spawn outside the envelope: healthy, even with malformed requests", () => {
     const m = scorecard(matrix02(), [], { ...period, spawns: [sp("allow", "context_derived"), sp("deny", "parent_session_mismatch")] }).workflow.chainIntegrity;
     expect(m).toMatchObject({ status: "healthy", spawns: 2, allowed: 1, authorityBreaches: 0, outsidePatterns: 0, requestFaults: 1 });

@@ -44,7 +44,10 @@ if (command === "settings") {
 
 const started = Date.now();
 const deadlineSeconds = Number(values.deadline ?? HOOK_TIMEOUT_SECONDS - 30);
-if (!(deadlineSeconds >= 10 && deadlineSeconds < HOOK_TIMEOUT_SECONDS)) fatal(`--deadline must be 10 to ${HOOK_TIMEOUT_SECONDS - 1} seconds`);
+// The hard timer below fires 2 s after the deadline; it must still beat Claude Code's own hook timeout,
+// past which silence counts as "no opinion" (fail-open). Keep 8 s more for process startup.
+const MAX_DEADLINE = HOOK_TIMEOUT_SECONDS - 10;
+if (!(deadlineSeconds >= 10 && deadlineSeconds <= MAX_DEADLINE)) fatal(`--deadline must be 10 to ${MAX_DEADLINE} seconds`);
 const deadline = started + deadlineSeconds * 1000;
 setTimeout(() => fatal("the shim ran out of time, so the call is denied"), deadline - started + 2000).unref();
 

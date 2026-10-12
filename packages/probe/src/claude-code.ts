@@ -38,7 +38,7 @@ export function observe(transcript: string, refusal?: string): Observation {
   const uses = new Map<string, string>(); // tool_use id -> tool name
   const errors = new Map<string, string>(); // tool_use id -> error text
   const denied = new Set<string>();
-  for (const line of transcript.split("\n")) {
+  for (const line of transcript.split(/\r?\n/)) {
     let m: any;
     try { m = JSON.parse(line); } catch { continue; }
     if (m?.type === "system" && m.subtype === "init") {

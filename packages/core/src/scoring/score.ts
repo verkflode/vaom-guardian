@@ -149,7 +149,7 @@ function fires(g: Validated, input: ScoreInput): boolean | null {
       const prior = h.values(input.row, g.fact, group, windowMs);
       if (prior === null) return null;
       const xs = prior.map(numeric).filter((x): x is { n: number; currency?: string } => x !== null && x.currency === v.currency).map((x) => x.n);
-      if (xs.length < g.minHistory) return true;
+      if (xs.length === 0 || xs.length < g.minHistory) return true;
       return v.n > g.factor * median(xs);
     }
     case "burst": {

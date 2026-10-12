@@ -26,7 +26,7 @@
       "copy": [
         "incident_id"
       ],
-      "error": "payments-ledger is in the payment pipeline, which is non-delegable: no restart there is within the agent's remit, whatever the score."
+      "error": "payments-ledger is in the payment pipeline, which is non-delegable: no restart there is within the agent's delegated authority, whatever the score."
     },
     {
       "id": "database-called-stateless",

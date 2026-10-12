@@ -40,6 +40,11 @@ describe("probing Claude Code (against a stand-in claude)", () => {
 });
 
 describe("reading a transcript", () => {
+  it("reads CRLF transcripts as well as LF ones", () => {
+    const lines = [JSON.stringify({ type: "system", subtype: "init", tools: ["Read", "mcp__config__set"] }), JSON.stringify({ type: "result", permission_denials: [{ tool_name: "mcp__config__set" }] })];
+    expect(observe(lines.join("\r\n"))).toEqual(observe(lines.join("\n")));
+    expect(observe(lines.join("\r\n")).denied).toEqual(["mcp__config__set"]);
+  });
   it("skips lines that aren't JSON and keeps only what the stream says", () => {
     const o = observe(['not json', JSON.stringify({ type: "system", subtype: "init", tools: ["Read", 7] })].join("\n"));
     expect(o).toEqual({ manifest: ["Read"], attempted: [], denied: [], refused: [], host: {} });

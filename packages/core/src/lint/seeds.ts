@@ -29,6 +29,9 @@ export function lintSeeds(seeds: unknown, policy: Policy): LintResult {
     if (!row) { err("row.unknown", `${p}/row`, `row ${seed.row} isn't in the matrix`); return; }
     const ov = row.oversight ?? {};
     if (ov.seeding?.enabled !== true) err("row.seeding-off", `${p}/row`, `row ${seed.row} doesn't enable seeding`);
+    // At most one seed is planted per real ask, so at most half the queue can be seeds. A higher rate would
+    // be disclosed to reviewers but never reached.
+    else if (ov.seeding.rate > 0.5) err("row.rate-unreachable", `${p}/row`, `row ${seed.row}'s seeding rate ${ov.seeding.rate} can't be reached: at most half a review queue can be planted`);
     else if ((ov.recordsFeed ?? []).length > 0) err("row.records-feed", `${p}/row`, `row ${seed.row}'s records feed ${ov.recordsFeed.join(", ")}; seeding is never allowed there`);
     const matched = (policy.binding.tools as Validated[]).filter((t) => matches(t, { tool: seed.tool, arguments: seed.arguments }) !== false);
     if (matched.length === 0) err("tool.unmapped", `${p}/tool`, `no binding entry maps ${seed.tool} with these arguments`);

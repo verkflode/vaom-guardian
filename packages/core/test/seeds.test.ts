@@ -27,6 +27,13 @@ describe("the seeds linter", () => {
     ["a tool the binding doesn't map", (s) => { s.seeds[0].tool = "mcp__deploy__nuke"; }, "tool.unmapped"],
     ["a tool that maps to another row", (s) => { s.seeds[0].tool = "mcp__telemetry__query"; }, "tool.other-row"],
   ];
+  it("rejects a row whose seeding rate can't be reached (row.rate-unreachable)", () => {
+    const m = load("incident.matrix.json");
+    m.rows.find((r: Doc) => r.id === "remediation.restart").oversight.seeding.rate = 0.6;
+    expect(rules(lintSeeds(load("incident.seeds.json"), policy(m)))).toEqual(["row.rate-unreachable"]);
+    m.rows.find((r: Doc) => r.id === "remediation.restart").oversight.seeding.rate = 0.5;
+    expect(lintSeeds(load("incident.seeds.json"), policy(m)).ok).toBe(true);
+  });
   for (const [name, mutate, rule] of cases) {
     it(`rejects ${name} (${rule})`, () => {
       const s = load("incident.seeds.json");

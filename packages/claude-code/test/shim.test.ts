@@ -2,7 +2,7 @@
 // as Claude Code sends them, decisions out, evidence checked with the Guardian's own verify.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -217,6 +217,15 @@ describe("asks: the Guardian is the approver", () => {
     const [out] = await Promise.all([runHook(restart(), shim(r)), decideOnPage(r, "reject")]);
     expect(decision(out)).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/rejected/);
+  });
+
+  it("refuses a --deadline whose hard timer could outlast Claude Code's hook timeout, with an explicit deny", () => {
+    const run = (d: string) => spawnSync(process.execPath, [CLI, "hook", "--guardian", "/nonexistent.json", "--agent", "a", "--deadline", d], { input: "", encoding: "utf8" });
+    for (const d of ["591", "599"]) {
+      const r = run(d);
+      expect(r.status).toBe(2);
+      expect(JSON.parse(r.stdout).hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: expect.stringMatching(/--deadline must be 10 to 590/) });
+    }
   });
 
   it("denies when its own deadline comes first", async () => {

@@ -7,6 +7,7 @@
 //   currency, no open context, conflicting approvers, a wire capability that disagrees with the binding)
 //   is unplaceable, never allowed.
 // - The strictest placement wins: across every matched binding entry and every batch item.
+// - The matrix grants only inside its effective window; with no valid clock, nothing is placed.
 // - Authority exists only inside a live execution context covering the call's row (and its task, if bound);
 //   a context's band ceiling narrows further.
 import { lintBinding } from "../lint/binding.ts";
@@ -82,6 +83,12 @@ export function evaluate(policy: Policy, call: Call, ctx: EvalContext): Decision
     binding: { id: policy.binding.id, version: policy.binding.version },
   };
   const unplaceable = (reasons: Reason[]): Decision => ({ outcome: "unplaceable", band: null, placements: [], reasons, reservations: [], policy: policyRef });
+
+  // The matrix grants nothing outside its effective window: before it takes effect, or from its end on.
+  if (!Number.isFinite(ctx.now)) return unplaceable([{ code: "clock.unknown", detail: "the evaluation has no valid time, so the matrix's effective window can't be checked" }]);
+  const eff = policy.matrix.effective as { from?: string; until?: string } | undefined;
+  if (eff?.from !== undefined && !(ctx.now >= Date.parse(eff.from))) return unplaceable([{ code: "matrix.not-in-effect", detail: `matrix ${policy.matrix.id}@${policy.matrix.version} takes effect at ${eff.from}` }]);
+  if (eff?.until !== undefined && !(ctx.now < Date.parse(eff.until))) return unplaceable([{ code: "matrix.expired", detail: `matrix ${policy.matrix.id}@${policy.matrix.version} expired at ${eff.until}` }]);
 
   const matched = (policy.binding.tools as Validated[]).map((t) => ({ t, m: matches(t, call) }));
   const unknown = matched.filter((x) => x.m === null).map((x) => x.t.id);

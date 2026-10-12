@@ -24,10 +24,12 @@ for (const f of lint.findings) console.error(`${f.severity} ${f.path} ${f.messag
 if (!lint.ok) process.exit(1);
 if (set.host.id !== "claude-code") { console.error(`these probes are for host ${set.host.id}; this runner probes claude-code`); process.exit(1); }
 
+const chosen = set.probes.filter((x) => !values.only || x.boundary === values.only);
+if (chosen.length === 0) { console.error(`no probe in ${set.id} is for boundary ${values.only}: nothing was probed`); process.exit(1); }
 const out = resolve(values.out ?? "probe-results");
 mkdirSync(out, { recursive: true });
 let failed = false;
-for (const p of set.probes.filter((x) => !values.only || x.boundary === values.only)) {
+for (const p of chosen) {
   const { result, transcript } = await runProbe(set, p, {
     project: resolve(values.project),
     ...(values["mcp-config"] ? { mcpConfig: resolve(values["mcp-config"]) } : {}),

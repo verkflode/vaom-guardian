@@ -64,6 +64,7 @@ function place(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput
   };
 
   const decision = evaluate(policy, call, {
+    now,
     history,
     ...(input.verifications ? { verifications: input.verifications } : {}),
     contexts: live,
