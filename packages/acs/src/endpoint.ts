@@ -168,7 +168,11 @@ export class AcsEndpoint {
     if (!p) throw new Error("no pending decision with that request id");
     if (p.record.decision.outcome !== "review" && p.record.decision.outcome !== "escalate") throw new Error("only a review or escalation takes an approval");
     if (approval.approver_role !== p.record.decision.approver_role) throw new Error(`the decision names ${p.record.decision.approver_role} as approver`);
-    p.approval = approval;
+    // Who approved is employee monitoring. The record names the approver only when the matrix enables
+    // reviewer-level metrics (which needs a recorded approval such as a DPIA); otherwise the role is all
+    // the evidence carries, whatever the caller passed.
+    const { approver_id: _id, ...anonymous } = approval;
+    p.approval = this.deps.policy.matrix.oversight?.reviewerLevelMetrics?.enabled === true ? approval : anonymous;
   }
 
   /** Resolve a pending decision that will never execute (rejected, expired, withdrawn). Returns the record to persist. */

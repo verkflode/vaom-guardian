@@ -108,6 +108,6 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
   }, { policy, ledger, contexts, newId: randomUUID });
 
   const origin = `http://localhost:${config.port}`;
-  const approvals = new Approvals({ store, endpoint, origin, rpId: "localhost", timeoutMs, roles: new Set(Object.keys(matrix.roles ?? {})) });
+  const approvals = new Approvals({ store, endpoint, origin, rpId: "localhost", timeoutMs, roles: new Set(Object.keys(matrix.roles ?? {})), recordApprovers: matrix.oversight?.reviewerLevelMetrics?.enabled === true });
   return { config, policy, store, endpoint, approvals, secrets, origin, recovered: expired.length };
 }

@@ -221,6 +221,17 @@ describe("results resolve decisions", () => {
     const res = send(s, "steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: req.env.params.request_id, exit_status: "success", outputs: [] });
     expect(res.records[0]?.resolution).toMatchObject({ result: "executed", approval: { record: "apr-1" } });
   });
+  it("the record names an approver only when the matrix enables reviewer-level metrics", () => {
+    const run = (s: Setup) => {
+      const req = send(s, "steps/toolCallRequest", restart("INC-7"));
+      s.ep.approve(S1, req.env.params.request_id, { approver_role: "sre-lead", approver_id: "jane", record: "apr-1" });
+      return send(s, "steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: req.env.params.request_id, exit_status: "success", outputs: [] }).records[0]!.resolution!.approval;
+    };
+    expect(run(started())).toEqual({ approver_role: "sre-lead", record: "apr-1" });
+    const s = started();
+    s.ep["deps"].policy.matrix.oversight.reviewerLevelMetrics = { enabled: true, approvalRef: "DPIA-1" };
+    expect(run(s)).toEqual({ approver_role: "sre-lead", approver_id: "jane", record: "apr-1" });
+  });
   it("a result for no open decision is an incident", () => {
     const s = started();
     const res = send(s, "steps/toolCallResult", { tool: { name: "x" }, request_id_ref: uuid(), exit_status: "success", outputs: [] });

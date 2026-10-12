@@ -131,13 +131,45 @@ describe("a review approved with WebAuthn, end to end", () => {
     const res = await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: ask.requestId, exit_status: "success", outputs: [] });
     expect(res.result.decision).toBe("allow");
     const rec = g.store.records().find((r) => r.request.wire?.request_id === ask.requestId)!;
-    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "sre-lead", approver_id: "owner" } });
+    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "sre-lead" } });
 
     const report = verifyEvidence(new Store(join(g.config.dataDir)), g.origin);
     expect(report).toMatchObject({ records: 1, approvals: 1, problems: [] });
     expect(report.sessions).toBe(1);
   });
+});
 
+describe("who approved is recorded only when the matrix enables reviewer-level metrics", () => {
+  async function approvedOnce(extra: Record<string, unknown> = {}) {
+    const { g, port } = await start(undefined, extra);
+    const call = await session(g, port);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    const auth = await enroll(g, port, ["sre-lead"]);
+    expect((await approveWith(port, auth, S1, ask.requestId)).status).toBe(200);
+    await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: ask.requestId, exit_status: "success", outputs: [] });
+    const rec = g.store.records().find((r) => r.request.wire?.request_id === ask.requestId)!;
+    const ev = g.store.events().find((e) => e.type === "approval")!;
+    return { g, rec, ev };
+  }
+  it("off (the default): neither the record nor the approval event names the approver, and verify still passes", async () => {
+    const { g, rec, ev } = await approvedOnce();
+    expect(rec.resolution?.approval).not.toHaveProperty("approver_id");
+    expect(ev).not.toHaveProperty("approver_id");
+    expect(JSON.stringify(g.store.records())).not.toContain('"owner"');
+    expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems).toEqual([]);
+  });
+  it("on, with its recorded approval: both name the approver", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-guardian-"));
+    const m = JSON.parse(readFileSync(join(examples, "incident.matrix.json"), "utf8"));
+    m.oversight.reviewerLevelMetrics = { enabled: true, approvalRef: "placeholder: DPIA" };
+    writeFileSync(join(dir, "matrix.json"), JSON.stringify(m));
+    const { rec, ev } = await approvedOnce({ matrix: join(dir, "matrix.json") });
+    expect(rec.resolution?.approval).toMatchObject({ approver_id: "owner" });
+    expect(ev.approver_id).toBe("owner");
+  });
+});
+
+describe("a review approved with WebAuthn, end to end (process)", () => {
   it("keeps its data private: directory 0700, secrets 0600", async () => {
     const { g } = await start();
     expect(statSync(g.config.dataDir).mode & 0o777).toBe(0o700);

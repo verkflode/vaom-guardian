@@ -320,7 +320,7 @@
             },
             "approver_id": {
               "type": "string",
-              "description": "Only when the deployment records approvers individually, which is employee monitoring and off by default."
+              "description": "Only when the matrix enables reviewer-level metrics (oversight.reviewerLevelMetrics, which needs a recorded approval such as a DPIA): naming approvers is employee monitoring, and off by default."
             },
             "record": {
               "type": "string",

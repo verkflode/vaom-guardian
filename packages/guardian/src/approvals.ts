@@ -49,6 +49,9 @@ export interface ApprovalsOptions {
   timeoutMs: number;
   /** Roles the matrix defines; enrollment may only grant these. */
   roles: ReadonlySet<string>;
+  /** Name the approver (the credential's label) in approval events and records. Only when the matrix
+   *  enables reviewer-level metrics: otherwise that's employee monitoring nobody approved. */
+  recordApprovers: boolean;
 }
 
 export class Approvals {
@@ -135,13 +138,13 @@ export class Approvals {
       throw e;
     }
     const ev = this.event("approval", {
-      decision: a.record.id, session, request_id: requestId, approver_role: role, approver_id: cred.label, credential_id: cred.id,
+      decision: a.record.id, session, request_id: requestId, approver_role: role, ...(this.o.recordApprovers ? { approver_id: cred.label } : {}), credential_id: cred.id,
       challenge_preimage: ch.preimage, assertion: { authenticator_data: assertion.authenticatorData, client_data_json: assertion.clientDataJSON, signature: assertion.signature },
       sign_count: signCount, latency_ms: now - a.createdAt,
     }, now);
     this.o.store.appendEvents([ev]);
     cred.signCount = signCount;
-    this.o.endpoint.approve(session, requestId, { approver_role: role, approver_id: cred.label, record: ev.id, latency_ms: now - a.createdAt });
+    this.o.endpoint.approve(session, requestId, { approver_role: role, ...(this.o.recordApprovers ? { approver_id: cred.label } : {}), record: ev.id, latency_ms: now - a.createdAt });
     this.settle(a, "approved");
     return ev;
   }
