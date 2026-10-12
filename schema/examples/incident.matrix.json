@@ -2,7 +2,7 @@
   "$schema": "../vaom-matrix-0.2.schema.json",
   "format": "vaom.matrix/0.2",
   "id": "example.ops.incident",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Autonomous incident remediation (VAOM v5 worked example 7D)",
   "description": "A SaaS provider's incident-remediation agent: monitoring on a lease, diagnosis by attenuated sub-agents, and a short enumerated list of bounded remediations. Production configuration changes, schema migrations, customer-data operations and anything touching the payment pipeline are non-delegable. Figures the whitepaper states are used as stated (a 60-minute context, 20-minute read-only sub-agents, chain depth two, composite 0.93 reaching Band A); thresholds, calibration records, lease lifetimes and oversight figures it doesn't state are illustrative.",
   "effective": {
@@ -304,7 +304,10 @@
         "reviewMinutes": 15,
         "escalationMinutes": 30,
         "auditSampleRate": 0.2,
-        "auditMinutes": 20
+        "auditMinutes": 20,
+        "minPlausibleReviewSeconds": 30,
+        "recordsFeed": [],
+        "seeding": { "enabled": true, "rate": 0.05, "targetDetectionRate": 0.9 }
       }
     },
     {

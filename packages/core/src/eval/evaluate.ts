@@ -138,7 +138,7 @@ export function evaluate(policy: Policy, call: Call, ctx: EvalContext): Decision
  * to a call that's otherwise unmapped, and counting it as a miss could drop an entry that would narrow.
  * The caller makes the call unplaceable.
  */
-function matches(entry: Validated, call: Call): boolean | null {
+export function matches(entry: Validated, call: Call): boolean | null {
   const m = entry.match;
   const named = m.tool !== undefined ? m.tool === call.tool : call.tool.startsWith(m.toolPrefix);
   if (!named) return false;

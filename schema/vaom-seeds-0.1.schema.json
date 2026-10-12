@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:seeds:0.1",
+  "title": "VAOM seeded cases",
+  "description": "Known-error cases planted into a review queue to measure whether oversight works (VAOM v5 Readiness Condition 6, scorecard metric 9), as aviation screening projects fictional threats into baggage images. Human-approved and versioned. Planting follows Condition 6 and is enforced in code: only on matrix rows that enable seeding (which the matrix allows only where records feed no regulatory reporting, investigations or decisions about identifiable individuals); a planted case is marked as seeded in the Guardian's store, never becomes a decision record, can never execute whatever the reviewer does, and so never reaches a cap, the decision history or a calibration sample; reviewers are told that planting exists and at what rate, never which cases are planted. A seed is placed exactly as a real call would be, so it shows the reviewer what a real ask would show. Passing this schema is necessary but not sufficient: the seeds linter checks each seed against the matrix and binding. Draft 0.1.",
+  "type": "object",
+  "required": ["format", "id", "version", "title", "approval", "disclosure", "seeds"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "format": { "const": "vaom.seeds/0.1" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "version": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "date"],
+      "description": "Sign-off by the role accountable for oversight of these decision types.",
+      "properties": {
+        "role": { "$ref": "#/$defs/identifier" },
+        "date": { "type": "string", "format": "date" },
+        "ref": { "type": "string" }
+      }
+    },
+    "disclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "date"],
+      "description": "Evidence that reviewers were told planting exists and at what rate. The approval page also says so on every visit.",
+      "properties": {
+        "statement": { "type": "string", "minLength": 1 },
+        "date": { "type": "string", "format": "date" },
+        "ref": { "type": "string" }
+      }
+    },
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "row", "tool", "arguments", "error"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "row": { "$ref": "#/$defs/identifier", "description": "The matrix row whose review queue the seed is planted in. The row must enable seeding." },
+          "tool": { "type": "string", "minLength": 1, "description": "The host tool the seed poses as calling. The binding must map it to a capability of the row." },
+          "arguments": { "type": "object", "description": "The call's arguments, as the reviewer will see them." },
+          "copy": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Top-level argument names whose values are copied from the real call the seed is planted beside (an incident id, say), so the seed fits the work in progress."
+          },
+          "error": { "type": "string", "minLength": 1, "description": "The known error a reviewer should catch. Shown to the reviewer after they decide, never before." }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$", "maxLength": 128 }
+  }
+}

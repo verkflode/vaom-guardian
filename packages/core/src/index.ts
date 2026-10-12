@@ -3,6 +3,7 @@
 export { lintMatrix, MATRIX_FORMATS } from "./lint/matrix.ts";
 export { lintBinding, BINDING_FORMAT } from "./lint/binding.ts";
 export { lintScoring, SCORING_FORMAT } from "./lint/scoring.ts";
+export { lintSeeds, SEEDS_FORMAT } from "./lint/seeds.ts";
 export { score, capLevel, type DimensionScore, type History, type Level, type ScoreInput, type ScoreResult } from "./scoring/score.ts";
 export type { Finding, LintResult, Severity } from "./lint/types.ts";
 export { compilePolicy, evaluate } from "./eval/evaluate.ts";
@@ -12,9 +13,9 @@ export type { DecisionRecord, RecordedFact, RecordInput, Resolution } from "./re
 export { canonicalize } from "./canonical/jcs.ts";
 export { sha256, hmacSha256, hex, utf8 } from "./crypto/sha256.ts";
 export { CapLedger } from "./caps/ledger.ts";
-export { decide, type DecideInput } from "./decide.ts";
+export { decide, preview, type DecideInput } from "./decide.ts";
 export { recordedGroup, recordFact } from "./record/record.ts";
 export { ContextRegistry, DEFAULT_CONTEXT_LIFETIME, type Context, type ContextSpec, type DeriveResult } from "./authority/contexts.ts";
 export { LeaseRegistry, type Health, type Lease } from "./authority/leases.ts";
 export type { LiveContext } from "./eval/types.ts";
-export { scorecard, SCORECARD_FORMAT, PAPER_DEFAULTS, type Metric, type RowScorecard, type Scorecard, type ScorecardOptions, type Status } from "./scorecard/scorecard.ts";
+export { scorecard, SCORECARD_FORMAT, PAPER_DEFAULTS, type Metric, type RowScorecard, type Scorecard, type ScorecardOptions, type SeedOutcome, type Status } from "./scorecard/scorecard.ts";

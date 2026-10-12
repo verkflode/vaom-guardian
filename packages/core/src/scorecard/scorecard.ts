@@ -51,6 +51,17 @@ export interface ScorecardOptions {
   to: string;
   /** Placements a row needs before any verdict. Default 20. */
   minSample?: number;
+  /** Outcomes of seeded cases, from the Guardian's store. Seeds are never decision records. */
+  seeds?: readonly SeedOutcome[];
+  /** Decided seeds a row needs before a verdict on detection. Default 10. */
+  seedMinSample?: number;
+}
+
+export interface SeedOutcome {
+  row: string;
+  ts: string;
+  /** detected: the reviewer rejected it. missed: approved (it never executes). expired: nobody decided. */
+  result: "detected" | "missed" | "expired";
 }
 
 /** Section 8's illustrative starting defaults, used only where the matrix declares nothing. */
@@ -70,7 +81,8 @@ export function scorecard(matrix: Validated, records: readonly DecisionRecord[],
   const inPeriod = records.filter((r) => { const t = Date.parse(r.request.ts); return t >= from && t < to; });
   const weeks = (to - from) / (7 * 86_400_000);
 
-  const rows = (matrix.rows as Validated[]).filter((row) => row.authority?.kind === "delegable").map((row) => rowScorecard(row, inPeriod, minSample));
+  const seeds = (opts.seeds ?? []).filter((s) => { const t = Date.parse(s.ts); return t >= from && t < to; });
+  const rows = (matrix.rows as Validated[]).filter((row) => row.authority?.kind === "delegable").map((row) => rowScorecard(row, inPeriod, minSample, seeds.filter((s) => s.row === row.id), opts.seedMinSample ?? 10));
   return {
     format: SCORECARD_FORMAT,
     matrix: { id: matrix.id, version: matrix.version },
@@ -88,7 +100,7 @@ export function scorecard(matrix: Validated, records: readonly DecisionRecord[],
 
 type Placed = { record: DecisionRecord; placement: DecisionRecord["decision"]["placements"][number] };
 
-function rowScorecard(row: Validated, records: readonly DecisionRecord[], minSample: number): RowScorecard {
+function rowScorecard(row: Validated, records: readonly DecisionRecord[], minSample: number, seeds: readonly SeedOutcome[], seedMinSample: number): RowScorecard {
   const placed: Placed[] = records.flatMap((record) => record.decision.placements.filter((p) => p.row === row.id).map((placement) => ({ record, placement })));
   const banded = placed.filter((x) => x.placement.band === "A" || x.placement.band === "B" || x.placement.band === "C");
   const enough = banded.length >= minSample;
@@ -145,9 +157,7 @@ function rowScorecard(row: Validated, records: readonly DecisionRecord[], minSam
   metrics.reviewEngagement = reviewEngagement(row, records, minSample, ov.minPlausibleReviewSeconds);
 
   // 9. Seeded-error detection.
-  metrics.seededDetection = ov.seeding?.enabled
-    ? { status: "not-measured", note: "seeding is enabled for this row but planted items aren't implemented yet" }
-    : { status: "not-measured", note: "seeding isn't enabled for this row" };
+  metrics.seededDetection = seededDetection(ov.seeding, seeds, seedMinSample);
 
   // 10. Escalation SLA attainment: the matrix declares no SLA, so report what happened to escalations.
   const escalations = records.filter((r) => r.decision.outcome === "escalate" && r.decision.placements.some((p) => p.row === row.id && p.band === "C"));
@@ -156,6 +166,21 @@ function rowScorecard(row: Validated, records: readonly DecisionRecord[], minSam
   metrics.escalationSla = { status: escalations.length ? "no-target" : "insufficient-sample", escalations: escalations.length, resolved: settled.length, expired, note: "the matrix declares no escalation SLA; an expired escalation never reached an authorized human in time" };
 
   return { row: row.id, title: row.title, decisions: placed.length, metrics };
+}
+
+/** 9. Seeded-error detection: rejected seeds over decided ones, against the rate set at design. */
+function seededDetection(seeding: Validated, seeds: readonly SeedOutcome[], seedMinSample: number): Metric {
+  if (seeding?.enabled !== true) return { status: "not-measured", note: "seeding isn't enabled for this row; review engagement is the evidence" };
+  const detected = seeds.filter((s) => s.result === "detected").length, missed = seeds.filter((s) => s.result === "missed").length;
+  const expired = seeds.filter((s) => s.result === "expired").length, decided = detected + missed;
+  const values = { planted: seeds.length, detected, missed, expired, ...(decided ? { detectionRate: detected / decided } : {}), target: seeding.targetDetectionRate };
+  if (decided < seedMinSample) return { status: "insufficient-sample", ...values, note: `${decided} decided seeds; at least ${seedMinSample} needed for a verdict` };
+  const breach = detected / decided < seeding.targetDetectionRate;
+  return {
+    status: breach ? "breach" : "healthy", ...values,
+    note: "aggregated per row; an expired seed was never decided and counts neither way",
+    ...(breach ? { diagnosis: "oversight not effective, whatever the approval rate says" } : {}),
+  };
 }
 
 function dimensionCorrelation(banded: Placed[], enough: boolean, short: Metric): Metric {

@@ -28,6 +28,21 @@ export interface DecideInput extends Omit<RecordInput, "call" | "decision" | "po
 }
 
 export function decide(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput): DecisionRecord {
+  const record = place(policy, call, ledger, input);
+  ledger.reserve(record);
+  return record;
+}
+
+/**
+ * The record decide() would build, with nothing reserved: no cap use, no history. For planting seeded
+ * cases (a seed must show a reviewer exactly what a real ask would). Its record is never an answer to an
+ * agent and is never stored as a decision.
+ */
+export function preview(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput): DecisionRecord {
+  return place(policy, call, ledger, input);
+}
+
+function place(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput): DecisionRecord {
   const now = Date.parse(input.ts);
   if (Number.isNaN(now)) throw new Error(`decide: ts ${JSON.stringify(input.ts)} is not a timestamp`);
 
@@ -70,6 +85,5 @@ export function decide(policy: Policy, call: Call, ledger: CapLedger, input: Dec
     ...(used && !input.context ? { context: { id: used.id, rows: [...used.rows] } } : {}),
     call, decision, policy,
   });
-  ledger.reserve(record);
   return record;
 }

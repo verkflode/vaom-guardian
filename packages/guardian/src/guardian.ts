@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { AcsEndpoint, PROFILES } from "@verkflode/vaom-guardian-acs";
-import { CapLedger, compilePolicy, ContextRegistry, lintMatrix, resolveRecord, type Policy } from "@verkflode/vaom-guardian-core";
+import { CapLedger, compilePolicy, ContextRegistry, lintMatrix, lintSeeds, resolveRecord, type Policy } from "@verkflode/vaom-guardian-core";
+import { Seeder, type SeedSet } from "./seeding.ts";
 import { Approvals } from "./approvals.ts";
 import { loadSecrets, type Secrets } from "./secrets.ts";
 import { Store } from "./store.ts";
@@ -20,6 +21,8 @@ export interface GuardianFileConfig {
   binding: string;
   /** Scoring policy files; every one a matrix row cites must be here, or the Guardian won't start. */
   scoring?: string[];
+  /** Seeded cases with known errors (vaom.seeds), planted on rows that enable seeding. Absent: no seeding. */
+  seeds?: string;
   dataDir: string;
   port: number;
   approvalTimeoutSeconds?: number;
@@ -28,7 +31,7 @@ export interface GuardianFileConfig {
   activation?: Record<string, Activation>;
 }
 
-const KEYS = new Set(["$schema", "format", "matrix", "binding", "scoring", "dataDir", "port", "approvalTimeoutSeconds", "skewWindowMs", "activation"]);
+const KEYS = new Set(["$schema", "format", "matrix", "binding", "scoring", "seeds", "dataDir", "port", "approvalTimeoutSeconds", "skewWindowMs", "activation"]);
 
 export function readConfig(path: string): GuardianFileConfig {
   const c = JSON.parse(readFileSync(path, "utf8"));
@@ -37,6 +40,7 @@ export function readConfig(path: string): GuardianFileConfig {
   for (const k of Object.keys(c)) if (!KEYS.has(k)) throw bad(`unknown key ${k}`);
   for (const k of ["matrix", "binding", "dataDir"]) if (typeof c[k] !== "string") throw bad(`${k} must be a path`);
   if (c.scoring !== undefined && !(Array.isArray(c.scoring) && c.scoring.every((s: unknown) => typeof s === "string"))) throw bad("scoring must be a list of paths");
+  if (c.seeds !== undefined && typeof c.seeds !== "string") throw bad("seeds must be a path");
   if (!Number.isInteger(c.port) || c.port < 1024 || c.port > 65535) throw bad("port must be an integer from 1024 to 65535");
   if (c.approvalTimeoutSeconds !== undefined && !(Number.isInteger(c.approvalTimeoutSeconds) && c.approvalTimeoutSeconds >= 10 && c.approvalTimeoutSeconds <= 540)) throw bad("approvalTimeoutSeconds must be 10 to 540 (under Claude Code's 600 s hook limit)");
   if (c.skewWindowMs !== undefined && !(Number.isInteger(c.skewWindowMs) && c.skewWindowMs >= 1000 && c.skewWindowMs <= 300_000)) throw bad("skewWindowMs must be 1000 to 300000");
@@ -45,7 +49,7 @@ export function readConfig(path: string): GuardianFileConfig {
     for (const k of Object.keys(a)) if (!["rows", "scopes", "task"].includes(k)) throw bad(`activation.${agent}: unknown key ${k}`);
   }
   const base = dirname(resolve(path));
-  return { ...c, matrix: resolve(base, c.matrix), binding: resolve(base, c.binding), ...(c.scoring ? { scoring: c.scoring.map((s: string) => resolve(base, s)) } : {}), dataDir: resolve(base, c.dataDir) };
+  return { ...c, matrix: resolve(base, c.matrix), binding: resolve(base, c.binding), ...(c.scoring ? { scoring: c.scoring.map((s: string) => resolve(base, s)) } : {}), ...(c.seeds ? { seeds: resolve(base, c.seeds) } : {}), dataDir: resolve(base, c.dataDir) };
 }
 
 export interface Guardian {
@@ -59,7 +63,10 @@ export interface Guardian {
   recovered: number;
 }
 
-export function createGuardian(config: GuardianFileConfig, now: number = Date.now()): Guardian {
+/** For tests: seeding randomness and delay. */
+export type SeedOptions = Pick<ConstructorParameters<typeof Seeder>[0], "random" | "delayMs">;
+
+export function createGuardian(config: GuardianFileConfig, now: number = Date.now(), seedOptions?: SeedOptions): Guardian {
   const matrix = JSON.parse(readFileSync(config.matrix, "utf8"));
   const binding = JSON.parse(readFileSync(config.binding, "utf8"));
   const lint = lintMatrix(matrix);
@@ -85,10 +92,27 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
     .filter((r) => !r.resolution && (r.decision.outcome === "review" || r.decision.outcome === "escalate") && !approved.has(r.id))
     .map((r) => resolveRecord(r, { ts, result: "expired" }));
   store.appendRecords(expired);
+  // Seeds planted before an unclean stop were never decided: they expire, like the asks around them.
+  const seedEvents = store.events();
+  const decidedSeeds = new Set(seedEvents.filter((e) => e.type === "seed-outcome").map((e) => e.decision as string));
+  store.appendEvents(seedEvents.filter((e) => e.type === "seed-planted" && !decidedSeeds.has(e.decision as string)).map((e) => ({
+    type: "seed-outcome", id: randomUUID(), ts, seed: e.seed, set: e.set, row: e.row, decision: e.decision, session: e.session, request_id: e.request_id, result: "expired", recovered: true,
+  })));
 
   const ledger = new CapLedger();
   ledger.load(store.records());
   const contexts = new ContextRegistry(policy);
+
+  let seeder: Seeder | undefined, seedSet: { id: string; version: string } | undefined;
+  if (config.seeds) {
+    const set = JSON.parse(readFileSync(config.seeds, "utf8"));
+    const lint = lintSeeds(set, policy);
+    if (!lint.ok) throw new Error(`seeds don't lint: ${lint.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
+    seedSet = { id: set.id, version: set.version };
+    const plantedBefore = new Map<string, number>();
+    for (const e of store.events()) if (e.type === "seed-planted") plantedBefore.set(e.seed as string, (plantedBefore.get(e.seed as string) ?? 0) + 1);
+    seeder = new Seeder({ policy, ledger, contexts, factKey: secrets.factKey, set: set as SeedSet, plantedBefore, ...(seedOptions ?? {}) });
+  }
   const timeoutMs = (config.approvalTimeoutSeconds ?? 300) * 1000;
   const endpoint = new AcsEndpoint({
     methodsEvaluated: ["steps/sessionStart", "steps/sessionEnd", "steps/toolCallRequest", "steps/toolCallResult", "steps/subagentStart"],
@@ -108,6 +132,6 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
   }, { policy, ledger, contexts, newId: randomUUID });
 
   const origin = `http://localhost:${config.port}`;
-  const approvals = new Approvals({ store, endpoint, origin, rpId: "localhost", timeoutMs, roles: new Set(Object.keys(matrix.roles ?? {})), recordApprovers: matrix.oversight?.reviewerLevelMetrics?.enabled === true });
+  const approvals = new Approvals({ store, endpoint, origin, rpId: "localhost", timeoutMs, roles: new Set(Object.keys(matrix.roles ?? {})), recordApprovers: matrix.oversight?.reviewerLevelMetrics?.enabled === true, ...(seeder && seedSet ? { seeder, seedSet } : {}) });
   return { config, policy, store, endpoint, approvals, secrets, origin, recovered: expired.length };
 }

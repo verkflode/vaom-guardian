@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
-import { createGuardian, createGuardianServer, readConfig, shimSignature, Store, verifyEvidence, type Guardian } from "../src/index.ts";
+import { createGuardian, createGuardianServer, readConfig, shimSignature, Store, verifyEvidence, type Guardian, type SeedOptions } from "../src/index.ts";
 import { SoftAuthenticator } from "./authenticator.ts";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
@@ -37,10 +37,10 @@ function configFile(dir: string, port: number, extra: Record<string, unknown> = 
   return path;
 }
 
-async function start(dir = mkdtempSync(join(tmpdir(), "vaom-guardian-")), extra: Record<string, unknown> = {}): Promise<{ g: Guardian; port: number; dir: string; server: Server }> {
+async function start(dir = mkdtempSync(join(tmpdir(), "vaom-guardian-")), extra: Record<string, unknown> = {}, seedOptions?: SeedOptions): Promise<{ g: Guardian; port: number; dir: string; server: Server }> {
   for (let tries = 0; ; tries++) {
     const port = 40000 + Math.floor(Math.random() * 20000);
-    const g = createGuardian(readConfig(configFile(dir, port, extra)));
+    const g = createGuardian(readConfig(configFile(dir, port, extra)), Date.now(), seedOptions);
     const server = createGuardianServer(g);
     try {
       await new Promise<void>((res, rej) => { server.once("error", rej); server.listen(port, "127.0.0.1", () => res()); });
@@ -389,5 +389,107 @@ describe("config", () => {
       expect(() => readConfig(configFile(dir, 47100, { approvalTimeoutSeconds: 600 }))).toThrow(/under Claude Code/);
       expect(() => createGuardian(readConfig(configFile(dir, 47100, { activation: { a: { rows: ["nope"] } } })))).toThrow(/not in the matrix/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("seeded cases (VAOM v5 Readiness Condition 6)", () => {
+  const seeds = join(examples, "incident.seeds.json");
+  const always: SeedOptions = { random: () => 0, delayMs: [0, 0] };
+  const origin = (port: number) => `http://localhost:${port}`;
+  /** A real restart ask, then the queue as the page sees it, with the planted case due at once. */
+  async function queued(seedOptions: SeedOptions = always, extra: Record<string, unknown> = { seeds }) {
+    const s = await start(undefined, extra, seedOptions);
+    const call = await session(s.g, s.port);
+    const real = await call("steps/toolCallRequest", restart("INC-7"));
+    const page = await http(s.port, "GET", "/api/asks");
+    const seed = page.json.asks.find((a: { request_id: string }) => a.request_id !== real.requestId);
+    return { ...s, call, real, page, seed };
+  }
+
+  it("plants beside a real review on a seeded row, looking exactly like a real ask, and discloses the rate", async () => {
+    const { g, page, real, seed } = await queued();
+    expect(page.json.asks).toHaveLength(2);
+    const realAsk = page.json.asks.find((a: { request_id: string }) => a.request_id === real.requestId);
+    expect(Object.keys(seed).sort()).toEqual(Object.keys(realAsk).sort());
+    expect(seed).toMatchObject({ tool: "mcp__deploy__rolling_restart", band: "B", approver_role: "sre-lead", rows: ["remediation.restart"], agent: "incident-agent", arguments: { incident_id: "INC-7" } });
+    expect(seed.reasons).toEqual(realAsk.reasons);
+    expect(JSON.stringify(page.json.asks)).not.toMatch(/planted|seed|known error/i);
+    expect(page.json.seeding).toMatchObject({ rows: [{ row: "remediation.restart", rate: 0.05 }] });
+    expect(page.json.seeding.statement).toMatch(/planted/);
+    // Marked in the store, never a decision record.
+    expect(g.store.events().filter((e) => e.type === "seed-planted")).toHaveLength(1);
+    expect(g.store.records().map((r) => r.request.wire?.request_id)).not.toContain(seed.request_id);
+  });
+
+  it("a rejected seed is a detection, revealed after the decision; nothing reaches the records", async () => {
+    const { g, port, seed } = await queued();
+    const before = g.store.records().length;
+    const r = await http(port, "POST", `/api/asks/${seed.session}/${seed.request_id}/reject`, { origin: origin(port), body: {} });
+    expect(r.json).toMatchObject({ status: "rejected", seeded: { error: expect.stringMatching(/./) } });
+    expect(g.store.events().find((e) => e.type === "seed-outcome")).toMatchObject({ result: "detected", row: "remediation.restart" });
+    expect(g.store.records()).toHaveLength(before);
+  });
+
+  it("an approved seed is a miss: it takes Touch ID like any approval, never executes, and verify checks it", async () => {
+    const { g, port, real, seed } = await queued();
+    const auth = await enroll(g, port, ["sre-lead"]);
+    const r = await approveWith(port, auth, seed.session, seed.request_id);
+    expect(r.json).toMatchObject({ status: "approved", seeded: { error: expect.stringMatching(/./) } });
+    expect(g.store.events().find((e) => e.type === "seed-outcome")).toMatchObject({ result: "missed" });
+    expect(g.store.events().find((e) => e.type === "seed-outcome")).not.toHaveProperty("approver_id");
+    expect(g.store.events().filter((e) => e.type === "approval")).toHaveLength(0);
+    // The real ask is untouched: still pending, still the only decision.
+    expect((await poll(g, port, S1, real.requestId)).json.status).toBe("pending");
+    expect(g.store.records().filter((x) => x.resolution?.result === "executed")).toHaveLength(0);
+    expect(verifyEvidence(new Store(g.config.dataDir), g.origin)).toMatchObject({ seeds: 1, problems: [] });
+  });
+
+  it("verify flags a planted case that turns up as a decision record", async () => {
+    const { g, seed } = await queued();
+    const planted = g.store.events().find((e) => e.type === "seed-planted")!;
+    const fake = { ...g.store.records()[0]!, id: planted.decision as string };
+    g.store.appendRecords([fake as never]);
+    expect(seed).toBeDefined();
+    expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n")).toMatch(/planted case became a decision record/);
+  });
+
+  it("an undecided seed expires, and counts neither way", async () => {
+    const { g, seed } = await queued();
+    g.approvals.expire(Date.now() + 3_600_000);
+    expect(g.store.events().find((e) => e.type === "seed-outcome")).toMatchObject({ result: "expired", request_id: seed.request_id });
+  });
+
+  it("a seed left pending by an unclean stop expires on restart", async () => {
+    const { g, dir } = await queued();
+    const again = await start(dir, { seeds }, always);
+    expect(again.g.store.events().find((e) => e.type === "seed-outcome")).toMatchObject({ result: "expired", recovered: true });
+    expect(g).toBeDefined();
+  });
+
+  it("plants nothing when the draw says no, or when no seed set is configured", async () => {
+    expect((await queued({ random: () => 0.99, delayMs: [0, 0] })).page.json.asks).toHaveLength(1);
+    const off = await queued(always, {});
+    expect(off.page.json.asks).toHaveLength(1);
+    expect(off.page.json.seeding).toBeNull();
+  });
+
+  it("skips a seed that a real call like it wouldn't send to review, rather than plant something unlike a real ask", async () => {
+    // Without copying the incident id, the seed falls outside the session's context: unplaceable, never asked.
+    const dir = mkdtempSync(join(tmpdir(), "vaom-guardian-"));
+    const s = JSON.parse(readFileSync(seeds, "utf8"));
+    for (const x of s.seeds) delete x.copy;
+    writeFileSync(join(dir, "seeds.json"), JSON.stringify(s));
+    const { g, page } = await queued(always, { seeds: join(dir, "seeds.json") });
+    expect(page.json.asks).toHaveLength(1);
+    expect(g.store.events().filter((e) => e.type === "seed-skipped")).toHaveLength(1);
+    expect(g.store.events().filter((e) => e.type === "seed-planted")).toHaveLength(0);
+  });
+
+  it("refuses to start with seeds for a row that doesn't enable seeding", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-guardian-"));
+    const s = JSON.parse(readFileSync(seeds, "utf8"));
+    s.seeds[0].row = "incident.monitor"; s.seeds[0].tool = "mcp__incident__declare";
+    writeFileSync(join(dir, "seeds.json"), JSON.stringify(s));
+    await expect(start(dir, { seeds: join(dir, "seeds.json") })).rejects.toThrow(/doesn't enable seeding/);
   });
 });

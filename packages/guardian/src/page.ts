@@ -32,6 +32,7 @@ const shell = (title: string, inner: string) => `<!doctype html>
 export const INDEX_HTML = shell("Guardian approvals", `
 <h1>Guardian approvals</h1>
 <p class="sub">Calls waiting for a human decision. Approving takes Touch ID, and approves that one call only.</p>
+<p id="seeding" class="note" hidden></p>
 <div id="asks"><p class="empty">Loading…</p></div>
 <p class="note">A Guardian decision is policy strength: it holds while the Guardian and its shim run.</p>`);
 
@@ -63,26 +64,38 @@ async function approve(a, msg, buttons) {
   try {
     const c = await post("/api/asks/" + a.session + "/" + a.request_id + "/challenge", {});
     const cred = await navigator.credentials.get({ publicKey: { challenge: b64d(c.challenge), rpId: c.rpId, allowCredentials: c.allowCredentials.map((id) => ({ type: "public-key", id: b64d(id) })), userVerification: "required", timeout: 60000 } });
-    await post("/api/asks/" + a.session + "/" + a.request_id + "/approve", { credentialId: b64e(cred.rawId), authenticatorData: b64e(cred.response.authenticatorData), clientDataJSON: b64e(cred.response.clientDataJSON), signature: b64e(cred.response.signature) });
-    msg.textContent = "Approved.";
+    const r = await post("/api/asks/" + a.session + "/" + a.request_id + "/approve", { credentialId: b64e(cred.rawId), authenticatorData: b64e(cred.response.authenticatorData), clientDataJSON: b64e(cred.response.clientDataJSON), signature: b64e(cred.response.signature) });
+    decided.add(a.request_id);
+    msg.textContent = r.seeded ? "This was a planted case, and it was not executed. The known error: " + r.seeded.error : "Approved.";
   } catch (e) { msg.className = "msg err"; msg.textContent = e.message; buttons.forEach((b) => b.disabled = false); }
   finally { busy.delete(a.request_id); refresh(); }
 }
 async function reject(a, msg, buttons) {
   buttons.forEach((b) => b.disabled = true); busy.add(a.request_id);
-  try { await post("/api/asks/" + a.session + "/" + a.request_id + "/reject", {}); msg.textContent = "Rejected."; }
+  try {
+    const r = await post("/api/asks/" + a.session + "/" + a.request_id + "/reject", {});
+    decided.add(a.request_id);
+    msg.textContent = r.seeded ? "Rejected. This was a planted case, and you caught it. The known error: " + r.seeded.error : "Rejected.";
+  }
   catch (e) { msg.className = "msg err"; msg.textContent = e.message; buttons.forEach((b) => b.disabled = false); }
   finally { busy.delete(a.request_id); refresh(); }
 }
 
 const shown = new Map();
+// Decided cards stay until the page is reloaded, so the outcome (and a planted case's known error) can be read.
+const decided = new Set();
 async function refresh() {
   const root = document.getElementById("asks");
   let data;
   try { const r = await fetch("/api/asks"); data = await r.json(); } catch { return; }
+  const s = document.getElementById("seeding");
+  if (data.seeding) {
+    s.hidden = false;
+    s.textContent = "Planted cases: " + data.seeding.statement + " Rates: " + data.seeding.rows.map((r) => r.title + " about " + Math.round(r.rate * 100) + "% of reviews").join("; ") + ". You're never told which cases are planted until you've decided.";
+  } else s.hidden = true;
   if (!data.enrolled) { root.replaceChildren(el("p", { class: "empty" }, "No approver is enrolled yet. Start the Guardian with --enroll to get an enrollment link.")); return; }
   const live = new Set(data.asks.map((a) => a.request_id));
-  for (const [id, node] of shown) if (!live.has(id) && !busy.has(id)) { node.remove(); shown.delete(id); }
+  for (const [id, node] of shown) if (!live.has(id) && !busy.has(id) && !decided.has(id)) { node.remove(); shown.delete(id); }
   for (const a of data.asks) {
     if (shown.has(a.request_id)) continue;
     const msg = el("span", { class: "msg" });

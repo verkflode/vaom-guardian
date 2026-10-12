@@ -6,6 +6,7 @@
     "../../../schema/examples/remediation-gate.scoring.json",
     "../../../schema/examples/incident-detection.scoring.json"
   ],
+  "seeds": "../../../schema/examples/incident.seeds.json",
   "dataDir": "../../../.guardian/incident",
   "port": 47100,
   "approvalTimeoutSeconds": 300,

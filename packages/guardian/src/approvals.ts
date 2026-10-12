@@ -8,6 +8,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { canonicalize, type DecisionRecord } from "@verkflode/vaom-guardian-core";
 import type { AcsEndpoint } from "@verkflode/vaom-guardian-acs";
+import type { Planned, Seeder } from "./seeding.ts";
 import type { GuardianEvent, Store } from "./store.ts";
 import { b64url, verifyAssertion, verifyRegistration, WebAuthnError, type Assertion, type Jwk, type Registration } from "./webauthn.ts";
 
@@ -22,6 +23,8 @@ export interface Ask {
   createdAt: number;
   expiresAt: number;
   status: AskStatus;
+  /** Set on a planted case. Never sent to the page; its record is never stored and never executes. */
+  seed?: { id: string; row: string; error: string; set: { id: string; version: string } };
 }
 
 export interface Credential { id: string; label: string; roles: string[]; jwk: Jwk; signCount: number }
@@ -52,6 +55,9 @@ export interface ApprovalsOptions {
   /** Name the approver (the credential's label) in approval events and records. Only when the matrix
    *  enables reviewer-level metrics: otherwise that's employee monitoring nobody approved. */
   recordApprovers: boolean;
+  /** Plants seeded cases on rows that enable seeding. Absent: no seeding. */
+  seeder?: Seeder;
+  seedSet?: { id: string; version: string };
 }
 
 export class Approvals {
@@ -60,6 +66,7 @@ export class Approvals {
   private readonly challenges = new Map<string, Challenge>();
   private readonly credentials = new Map<string, Credential>();
   private readonly waiters = new Map<string, Set<(s: AskStatus) => void>>();
+  private scheduled: Planned[] = [];
   private enroll: EnrollToken | undefined;
 
   constructor(o: ApprovalsOptions) {
@@ -67,7 +74,7 @@ export class Approvals {
     // Credentials are rebuilt from the event log: enrollments, then counters from later approvals.
     for (const e of o.store.events()) {
       if (e.type === "enrolled") this.credentials.set(e.credential_id as string, { id: e.credential_id as string, label: e.label as string, roles: e.roles as string[], jwk: e.jwk as Jwk, signCount: e.sign_count as number });
-      if (e.type === "approval") { const c = this.credentials.get(e.credential_id as string); if (c) c.signCount = e.sign_count as number; }
+      if (e.type === "approval" || (e.type === "seed-outcome" && e.result === "missed")) { const c = this.credentials.get(e.credential_id as string); if (c) c.signCount = e.sign_count as number; }
       if (e.type === "credential-revoked") this.credentials.delete(e.credential_id as string);
     }
   }
@@ -97,7 +104,33 @@ export class Approvals {
   add(record: DecisionRecord, call: Ask["call"], session: string, requestId: string, now: number): Ask {
     const a: Ask = { session, requestId, record, call, createdAt: now, expiresAt: now + this.o.timeoutMs, status: "pending" };
     this.asks.set(this.key(session, requestId), a);
+    const planned = this.o.seeder?.consider({ record, session, call }, now);
+    if (planned) this.scheduled.push(planned);
     return a;
+  }
+
+  /** Plant seeds that are due. Each is placed by the evaluator as of now, exactly as a real call would be. */
+  private plantDue(now: number): void {
+    if (!this.o.seeder || this.scheduled.length === 0) return;
+    const due = this.scheduled.filter((p) => p.dueAt <= now);
+    this.scheduled = this.scheduled.filter((p) => p.dueAt > now);
+    for (const p of due) {
+      const placed = this.o.seeder.place(p, now);
+      const set = this.o.seedSet ?? { id: "", version: "" };
+      if (!placed) {
+        this.o.store.appendEvents([this.event("seed-skipped", { seed: p.seed.id, set, row: p.seed.row, why: "a call like it wouldn't be asked now" }, now)]);
+        continue;
+      }
+      this.o.store.appendEvents([this.event("seed-planted", { seed: p.seed.id, set, row: p.seed.row, decision: placed.record.id, session: p.session, request_id: placed.requestId }, now)]);
+      this.asks.set(this.key(p.session, placed.requestId), {
+        session: p.session, requestId: placed.requestId, record: placed.record, call: placed.call, createdAt: now, expiresAt: now + this.o.timeoutMs, status: "pending",
+        seed: { id: p.seed.id, row: p.seed.row, error: p.seed.error, set },
+      });
+    }
+  }
+
+  private seedOutcome(a: Ask, result: "detected" | "missed" | "expired", now: number, extra: Record<string, unknown> = {}): GuardianEvent {
+    return this.event("seed-outcome", { seed: a.seed!.id, set: a.seed!.set, row: a.seed!.row, decision: a.record.id, session: a.session, request_id: a.requestId, result, latency_ms: now - a.createdAt, ...extra }, now);
   }
 
   get(session: string, requestId: string): Ask | undefined {
@@ -137,6 +170,18 @@ export class Approvals {
       if (e instanceof WebAuthnError) throw new ApprovalError(403, `assertion rejected: ${e.message}`);
       throw e;
     }
+    if (a.seed) {
+      // A planted case: approving it is a miss. Nothing executes; there's no decision to resolve.
+      const ev = this.seedOutcome(a, "missed", now, {
+        approver_role: role, ...(this.o.recordApprovers ? { approver_id: cred.label } : {}), credential_id: cred.id,
+        challenge_preimage: ch.preimage, assertion: { authenticator_data: assertion.authenticatorData, client_data_json: assertion.clientDataJSON, signature: assertion.signature },
+        sign_count: signCount,
+      });
+      this.o.store.appendEvents([ev]);
+      cred.signCount = signCount;
+      this.settle(a, "approved");
+      return ev;
+    }
     const ev = this.event("approval", {
       decision: a.record.id, session, request_id: requestId, approver_role: role, ...(this.o.recordApprovers ? { approver_id: cred.label } : {}), credential_id: cred.id,
       challenge_preimage: ch.preimage, assertion: { authenticator_data: assertion.authenticatorData, client_data_json: assertion.clientDataJSON, signature: assertion.signature },
@@ -149,19 +194,43 @@ export class Approvals {
     return ev;
   }
 
-  /** Reject. Narrowing needs no credential: anyone at the page may say no, and it's logged as such. */
-  reject(session: string, requestId: string, now: number): void {
+  /** Reject. Narrowing needs no credential: anyone at the page may say no, and it's logged as such.
+   *  Returns the known error when the ask was a planted case, for the page to show after the decision. */
+  reject(session: string, requestId: string, now: number): { seededError?: string } {
     const a = this.live(session, requestId, now);
+    if (a.seed) {
+      this.o.store.appendEvents([this.seedOutcome(a, "detected", now, { authenticated: false })]);
+      this.settle(a, "rejected");
+      return { seededError: a.seed.error };
+    }
     const resolved = this.o.endpoint.close(session, requestId, "rejected", new Date(now).toISOString());
     this.o.store.appendRecords([resolved]);
     this.o.store.appendEvents([this.event("rejection", { decision: a.record.id, session, request_id: requestId, authenticated: false }, now)]);
     this.settle(a, "rejected");
+    return {};
+  }
+
+  /** The known error of a planted case that has been decided, for the page to show afterwards. */
+  revealed(session: string, requestId: string): string | undefined {
+    const a = this.get(session, requestId);
+    return a?.seed && a.status !== "pending" ? a.seed.error : undefined;
+  }
+
+  /** The seeding disclosure the page shows on every visit, or null when nothing is seeded. */
+  seeding(): ReturnType<Seeder["disclosure"]> | null {
+    return this.o.seeder ? this.o.seeder.disclosure() : null;
   }
 
   /** Expire pending asks past their timeout: the ACS timeout_disposition is deny. */
   expire(now: number): void {
+    this.plantDue(now);
     for (const a of this.asks.values()) {
       if (a.status !== "pending" || a.expiresAt > now) continue;
+      if (a.seed) {
+        this.o.store.appendEvents([this.seedOutcome(a, "expired", now)]);
+        this.settle(a, "expired");
+        continue;
+      }
       const resolved = this.o.endpoint.close(a.session, a.requestId, "expired", new Date(now).toISOString());
       this.o.store.appendRecords([resolved]);
       this.o.store.appendEvents([this.event("expiry", { decision: a.record.id, session: a.session, request_id: a.requestId }, now)]);

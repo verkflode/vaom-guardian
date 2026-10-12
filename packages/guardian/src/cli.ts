@@ -20,7 +20,7 @@ const config = readConfig(values.config);
 
 if (command === "verify") {
   const r = verifyEvidence(new Store(config.dataDir), `http://localhost:${config.port}`);
-  console.log(`${r.records} records, ${r.sessions} sessions, ${r.approvals} approvals`);
+  console.log(`${r.records} records, ${r.sessions} sessions, ${r.approvals} approvals, ${r.seeds} planted cases`);
   for (const p of r.problems) console.log(`PROBLEM ${p}`);
   process.exit(r.problems.length ? 1 : 0);
 }
@@ -29,7 +29,9 @@ if (command === "scorecard") {
   // Read-only: the evidence files and the matrix, no Guardian started. Default period: the last 7 days.
   const to = values.to ?? new Date().toISOString();
   const from = values.from ?? new Date(Date.parse(to) - 7 * 86_400_000).toISOString();
-  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), new Store(config.dataDir).records(), { from, to });
+  const store = new Store(config.dataDir);
+  const seeds = store.events().filter((e) => e.type === "seed-outcome").map((e) => ({ row: e.row as string, ts: e.ts, result: e.result as "detected" | "missed" | "expired" }));
+  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), store.records(), { from, to, seeds });
   if (values.json) { console.log(JSON.stringify(s, null, 2)); process.exit(0); }
   const line = (name: string, m: Metric) => console.log(`  ${(m.status === "breach" ? "BREACH" : m.status).padEnd(19)}  ${name}${m.diagnosis ? `: ${m.diagnosis}` : ""}`);
   console.log(`Scorecard for ${s.matrix.id}@${s.matrix.version}, ${s.period.from} to ${s.period.to}: ${s.records} records`);

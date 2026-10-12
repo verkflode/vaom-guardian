@@ -111,6 +111,7 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
       if (p === "/api/asks") {
         return json(res, 200, {
           enrolled: g.approvals.hasCredentials(),
+          seeding: g.approvals.seeding(),
           asks: g.approvals.pending(now()).map((a) => ({
             session: a.session, request_id: a.requestId, tool: a.call.tool, arguments: a.call.arguments,
             rows: [...new Set(a.record.decision.placements.map((x) => x.row))], capabilities: [...new Set(a.record.decision.placements.map((x) => x.capability))],
@@ -132,9 +133,14 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
     if (a) {
       const [, session, requestId, action] = a as unknown as [string, string, string, string];
       if (action === "challenge") return json(res, 200, g.approvals.challenge(session, requestId, now()));
-      if (action === "approve") { const ev = g.approvals.approve(session, requestId, input, now()); return json(res, 200, { status: "approved", approval: ev.id }); }
-      g.approvals.reject(session, requestId, now());
-      return json(res, 200, { status: "rejected" });
+      // A planted case is revealed only once decided, so the reviewer learns from it.
+      if (action === "approve") {
+        const ev = g.approvals.approve(session, requestId, input, now());
+        const seededError = g.approvals.revealed(session, requestId);
+        return json(res, 200, { status: "approved", approval: ev.id, ...(seededError ? { seeded: { error: seededError } } : {}) });
+      }
+      const r = g.approvals.reject(session, requestId, now());
+      return json(res, 200, { status: "rejected", ...(r.seededError ? { seeded: { error: r.seededError } } : {}) });
     }
     if (p === "/api/enroll/options") return json(res, 200, g.approvals.enrollmentOptions(input?.token, now()));
     if (p === "/api/enroll") { const ev = g.approvals.completeEnrollment(input?.token, input?.registration, now()); return json(res, 200, { enrolled: ev.credential_id, roles: ev.roles }); }
