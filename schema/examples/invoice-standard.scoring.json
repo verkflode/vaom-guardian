@@ -1,0 +1,90 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "invoice-standard",
+  "version": "3.2",
+  "title": "Standard invoice within value ceiling",
+  "decisionType": "standard invoice within value ceiling",
+  "approval": {
+    "role": "ap-owner",
+    "date": "2026-09-15",
+    "ref": "placeholder: AP scoring policy sign-off"
+  },
+  "description": "Modelled on the worked computation in VAOM v5 Section 8, with two departures. Model certainty carries no weight here: an agent's stated certainty can only lower a score (it keeps the paper's 0.70 floor). Independent verification isn't a dimension: the row's verificationRequired keeps Band A behind a passing verifier instead. Rule match reads only the action's own facts; a PO three-way match against the ERP is the verifier's job. Weights, floors and penalties are illustrative, as the paper's are.",
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 0,
+      "floor": "must-pass",
+      "description": "Gate, not weighted, as in the paper.",
+      "checks": [
+        {
+          "id": "inputs-present",
+          "present": [
+            "amount",
+            "counterparty",
+            "task",
+            "po_reference"
+          ]
+        }
+      ]
+    },
+    "ruleMatch": {
+      "weight": 0.5,
+      "floor": 0.8,
+      "rules": [
+        {
+          "id": "po-referenced",
+          "description": "The approval cites a purchase order.",
+          "when": {
+            "fact": "po_reference",
+            "op": "ne",
+            "value": ""
+          },
+          "hard": true
+        }
+      ]
+    },
+    "anomaly": {
+      "weight": 0.5,
+      "floor": 0.6,
+      "description": "1 = no anomaly.",
+      "signals": [
+        {
+          "id": "unfamiliar-vendor",
+          "kind": "unseen",
+          "fact": "counterparty",
+          "window": "P365D",
+          "penalty": 0.25,
+          "description": "No approved invoice from this vendor in the past year."
+        },
+        {
+          "id": "unusual-amount",
+          "kind": "unusual-value",
+          "fact": "amount",
+          "groupBy": [
+            "counterparty"
+          ],
+          "factor": 3,
+          "minHistory": 3,
+          "window": "P365D",
+          "penalty": 0.25,
+          "description": "More than three times this vendor's median, or too little history to say."
+        },
+        {
+          "id": "approval-burst",
+          "kind": "burst",
+          "count": 10,
+          "window": "PT1H",
+          "groupBy": [
+            "counterparty"
+          ],
+          "penalty": 0.5,
+          "description": "Ten or more approvals for one vendor within the hour."
+        }
+      ]
+    }
+  },
+  "modelCertainty": {
+    "floor": 0.7
+  }
+}

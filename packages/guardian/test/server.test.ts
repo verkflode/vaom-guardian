@@ -27,6 +27,7 @@ function configFile(dir: string, port: number, extra: Record<string, unknown> = 
     format: "vaom-guardian.config/0.1",
     matrix: join(examples, "incident.matrix.json"),
     binding: join(examples, "incident.binding.json"),
+    scoring: ["remediation-gate", "incident-detection"].map((s) => join(examples, `${s}.scoring.json`)),
     dataDir: "data",
     port,
     approvalTimeoutSeconds: 60,
@@ -114,14 +115,14 @@ describe("a review approved with WebAuthn, end to end", () => {
     const { g, port } = await start();
     const call = await session(g, port);
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    expect(ask.result).toMatchObject({ decision: "ask", ask_details: { approver: { id: "head-of-engineering" } } });
+    expect(ask.result).toMatchObject({ decision: "ask", ask_details: { approver: { id: "sre-lead" } } });
 
     const page = await http(port, "GET", "/api/asks");
     expect(page.json.asks).toHaveLength(1);
-    expect(page.json.asks[0]).toMatchObject({ tool: "mcp__deploy__rolling_restart", arguments: { incident_id: "INC-7", service: "web", stateless: true }, approver_role: "head-of-engineering", band: "C" });
+    expect(page.json.asks[0]).toMatchObject({ tool: "mcp__deploy__rolling_restart", arguments: { incident_id: "INC-7", service: "web", stateless: true }, approver_role: "sre-lead", band: "B" });
 
     expect((await poll(g, port, S1, ask.requestId)).json.status).toBe("pending");
-    const auth = await enroll(g, port, ["head-of-engineering"]);
+    const auth = await enroll(g, port, ["sre-lead"]);
     const waiting = poll(g, port, S1, ask.requestId, { wait: 10 });
     const ok = await approveWith(port, auth, S1, ask.requestId);
     expect(ok.status, JSON.stringify(ok.json)).toBe(200);
@@ -130,7 +131,7 @@ describe("a review approved with WebAuthn, end to end", () => {
     const res = await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: ask.requestId, exit_status: "success", outputs: [] });
     expect(res.result.decision).toBe("allow");
     const rec = g.store.records().find((r) => r.request.wire?.request_id === ask.requestId)!;
-    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "head-of-engineering", approver_id: "owner" } });
+    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "sre-lead", approver_id: "owner" } });
 
     const report = verifyEvidence(new Store(join(g.config.dataDir)), g.origin);
     expect(report).toMatchObject({ records: 1, approvals: 1, problems: [] });
@@ -149,7 +150,7 @@ describe("approvals can't be forged or reused", () => {
     const { g, port } = await start();
     const call = await session(g, port);
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    const auth = await enroll(g, port, ["sre-lead"]);
+    const auth = await enroll(g, port, ["head-of-engineering"]);
     const r = await approveWith(port, auth, S1, ask.requestId);
     expect(r.status).toBe(403);
     expect((await poll(g, port, S1, ask.requestId)).json.status).toBe("pending");
@@ -159,8 +160,8 @@ describe("approvals can't be forged or reused", () => {
     const call = await session(g, port);
     const origin = `http://localhost:${port}`;
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    await enroll(g, port, ["head-of-engineering"]);
-    const lead = await enroll(g, port, ["sre-lead"]);
+    await enroll(g, port, ["sre-lead"]);
+    const lead = await enroll(g, port, ["head-of-engineering"]);
     const c = await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/challenge`, { origin, body: {} });
     expect(c.json.allowCredentials).not.toContain(lead.credentialId);
     const r = await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/approve`, { origin, body: lead.get({ challenge: c.json.challenge, origin, rpId: "localhost" }) });
@@ -171,7 +172,7 @@ describe("approvals can't be forged or reused", () => {
     const { g, port } = await start(undefined, { approvalTimeoutSeconds: 300 });
     const call = await session(g, port);
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    const auth = await enroll(g, port, ["head-of-engineering"]);
+    const auth = await enroll(g, port, ["sre-lead"]);
     const t = Date.now();
     const c = g.approvals.challenge(S1, ask.requestId, t);
     expect(() => g.approvals.approve(S1, ask.requestId, auth.get({ challenge: c.challenge, origin: g.origin, rpId: "localhost" }), t + 121_000)).toThrow(/no live challenge/);
@@ -189,7 +190,7 @@ describe("approvals can't be forged or reused", () => {
     const call = await session(g, port);
     const origin = `http://localhost:${port}`;
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    const auth = await enroll(g, port, ["head-of-engineering"]);
+    const auth = await enroll(g, port, ["sre-lead"]);
     expect((await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/approve`, { origin, body: auth.get({ challenge: "AAAA", origin, rpId: "localhost" }) })).status).toBe(409);
     const stranger = new SoftAuthenticator();
     const c = await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/challenge`, { origin, body: {} });
@@ -214,14 +215,14 @@ describe("approvals can't be forged or reused", () => {
     const { g, port } = await start();
     const call = await session(g, port);
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
-    const auth = await enroll(g, port, ["head-of-engineering"]);
+    const auth = await enroll(g, port, ["sre-lead"]);
     await approveWith(port, auth, S1, ask.requestId);
     await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: ask.requestId, exit_status: "success", outputs: [] });
     expect(verifyEvidence(g.store, g.origin).problems).toEqual([]);
 
     const ev = join(g.config.dataDir, "events.jsonl");
     const original = readFileSync(ev, "utf8");
-    writeFileSync(ev, original.replace(/"approver_role":"head-of-engineering"/, '"approver_role":"sre-lead"'));
+    writeFileSync(ev, original.replace(/"approver_role":"sre-lead"/, '"approver_role":"head-of-engineering"'));
     expect(verifyEvidence(g.store, g.origin).problems.join("\n")).toMatch(/approval .*(doesn't hold|different decision)/);
     writeFileSync(ev, original);
 
@@ -230,7 +231,7 @@ describe("approvals can't be forged or reused", () => {
     const sig = /"signature":"([A-Za-z0-9_-]+)"/.exec(original)![1]!;
     expect(tampered(new RegExp(`"signature":"${sig}"`), `"signature":"${sig.slice(0, -4)}AAAA"`)).toMatch(/signature does not verify/);
     // An enrollment edited to drop the role the approval used.
-    expect(tampered(/"roles":\["head-of-engineering"\]/, '"roles":["sre-lead"]')).toMatch(/doesn't hold head-of-engineering/);
+    expect(tampered(/"roles":\["sre-lead"\]/, '"roles":["head-of-engineering"]')).toMatch(/doesn't hold sre-lead/);
     // A record whose approval reference points nowhere.
     const recs = join(g.config.dataDir, "records.jsonl");
     const recOriginal = readFileSync(recs, "utf8");
@@ -331,7 +332,7 @@ describe("HTTP boundary", () => {
     const { g, port } = await start();
     const origin = `http://localhost:${port}`;
     expect((await http(port, "POST", "/api/enroll/options", { origin, body: { token: "guess" } })).status).toBe(403);
-    const token = g.approvals.openEnrollment("owner", ["sre-lead"], Date.now());
+    const token = g.approvals.openEnrollment("owner", ["head-of-engineering"], Date.now());
     expect((await http(port, "POST", "/api/enroll/options", { origin, body: { token: token.slice(0, -1) + "x" } })).status).toBe(403);
     const o = await http(port, "POST", "/api/enroll/options", { origin, body: { token } });
     const reg = new SoftAuthenticator().create({ challenge: o.json.challenge, origin, rpId: "localhost" });

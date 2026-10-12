@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:scoring:0.1",
+  "title": "VAOM scoring policy",
+  "description": "How a composite confidence score is computed for one decision type (VAOM v5 Section 8): must-pass gates, per-dimension floors and weights, each dimension computed deterministically from the facts the binding extracts and from the Guardian's own decision history. A matrix row cites a policy by id and version; its thresholds map the composite to a confidence level. The policy is human-approved and versioned like the matrix: an evaluator computes exactly what is written here and cites the version in every record. Engine-agnostic: nothing here names a wire protocol, policy engine or agent host. Passing this schema is necessary but not sufficient: a policy is accepted only if it also passes the scoring linter (weights summing to 1, unique ids, facts the binding declares, history facts recorded in a usable form). Draft 0.1.\n\nScoring. A dimension scores between 0 and 1. The composite is the sum of weight times score over the dimensions present. Then, in this order of strictness: a 'must-pass' dimension scoring below 1 sets the level to low; a dimension below its numeric floor, a failed hard rule, or a stated model certainty below its floor caps the level at medium (VAOM's 'capped at the review band'). Which band each level reaches is the matrix row's routing, not this policy's.\n\nModel certainty, as stated by the agent, carries no weight: it can only lower the composite (the composite becomes the smaller of the two) or cap the level through its floor. A score never rises because the agent says it is confident.\n\nIndependent verification is not a dimension in this version. A row's verificationRequired keeps Band A behind a passing verifier, which the evaluator receives separately.",
+  "type": "object",
+  "required": ["format", "id", "version", "title", "approval", "dimensions"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "format": { "const": "vaom.scoring/0.1" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Matched exactly against the version a matrix row cites. Recalibration that changes a weight, floor, rule or signal is a new version."
+    },
+    "title": { "type": "string" },
+    "decisionType": { "type": "string", "description": "The decision type the policy is calibrated for. Scores from different policies aren't comparable." },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "date"],
+      "description": "Sign-off by the role accountable for the decision type.",
+      "properties": {
+        "role": { "$ref": "#/$defs/identifier" },
+        "date": { "type": "string", "format": "date" },
+        "ref": { "type": "string", "description": "Pointer to the approval evidence." }
+      }
+    },
+    "description": { "type": "string" },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "dataCompleteness": {
+          "description": "Whether the inputs are present, validated and in range. Score: the share of checks that pass. A check whose fact is missing fails.",
+          "allOf": [{ "$ref": "#/$defs/dimension" }],
+          "required": ["checks"],
+          "properties": {
+            "checks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/check" } }
+          },
+          "unevaluatedProperties": false
+        },
+        "ruleMatch": {
+          "description": "How far deterministic business rules confirm the action. Score: the weighted share of rules that hold. A rule that can't be evaluated doesn't hold. A failed hard rule caps the level at medium whatever the composite (VAOM v5 Section 8: letting high confidence override a failed rule defeats the purpose of having rules). Rules read the action's own facts: what they confirm is the action that will execute, not a claim about it.",
+          "allOf": [{ "$ref": "#/$defs/dimension" }],
+          "required": ["rules"],
+          "properties": {
+            "rules": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } }
+          },
+          "unevaluatedProperties": false
+        },
+        "anomaly": {
+          "description": "Deviation from this row's own history (1 = no anomaly). Score: 1 minus the penalties of the signals that fire, never below 0. A signal whose history can't be read fires.",
+          "allOf": [{ "$ref": "#/$defs/dimension" }],
+          "required": ["signals"],
+          "properties": {
+            "signals": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/signal" } }
+          },
+          "unevaluatedProperties": false
+        }
+      }
+    },
+    "modelCertainty": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The agent's stated certainty, if the host passes one. Never weighted. Absent from the policy: stated certainty is ignored.",
+      "properties": {
+        "floor": { "$ref": "#/$defs/probability", "description": "A stated certainty below this caps the level at medium." },
+        "required": { "type": "boolean", "default": false, "description": "With no stated certainty, the level is low." }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$", "maxLength": 128 },
+    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "duration": { "type": "string", "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$", "description": "ISO 8601 duration, e.g. 'PT60M', 'P30D'." },
+    "dimension": {
+      "type": "object",
+      "required": ["weight", "floor"],
+      "properties": {
+        "weight": { "$ref": "#/$defs/probability", "description": "Share of the composite. 0 makes the dimension a gate only. Weights across the policy sum to 1." },
+        "floor": {
+          "oneOf": [{ "$ref": "#/$defs/probability" }, { "const": "must-pass" }],
+          "description": "A number: below it, the level is capped at medium. 'must-pass': anything below 1 sets the level to low."
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "condition": {
+      "description": "A predicate over facts. A missing fact makes it unevaluable, which counts as not holding.",
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["all"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["any"], "properties": { "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fact", "op", "value"],
+          "properties": {
+            "fact": { "$ref": "#/$defs/identifier" },
+            "op": { "enum": ["eq", "ne", "in", "gt", "gte", "lt", "lte"] },
+            "value": {}
+          }
+        }
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "description": "Passes when every fact in 'present' was extracted with its declared type, and 'when' (if given) holds.",
+      "anyOf": [{ "required": ["present"] }, { "required": ["when"] }],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "description": { "type": "string" },
+        "present": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } },
+        "when": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "when"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "description": { "type": "string" },
+        "when": { "$ref": "#/$defs/condition" },
+        "weight": { "type": "number", "exclusiveMinimum": 0, "default": 1, "description": "Relative weight within the dimension." },
+        "hard": { "type": "boolean", "default": false, "description": "Failing it caps the level at medium." }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "required": ["id", "kind", "penalty"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "description": { "type": "string" },
+        "penalty": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      },
+      "oneOf": [
+        {
+          "description": "Fires when no executed decision on this row had the same value of the fact (within the window, if given). For an unfamiliar vendor, say.",
+          "properties": {
+            "kind": { "const": "unseen" },
+            "fact": { "$ref": "#/$defs/identifier" },
+            "window": { "$ref": "#/$defs/duration" }
+          },
+          "required": ["fact"]
+        },
+        {
+          "description": "Fires when the value exceeds 'factor' times the median of executed decisions on this row in the same group (within the window, if given), or when there are fewer than 'minHistory' of them. Money is compared within one currency only.",
+          "properties": {
+            "kind": { "const": "unusual-value" },
+            "fact": { "$ref": "#/$defs/identifier" },
+            "factor": { "type": "number", "exclusiveMinimum": 1 },
+            "minHistory": { "type": "integer", "minimum": 1 },
+            "groupBy": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } },
+            "window": { "$ref": "#/$defs/duration" }
+          },
+          "required": ["fact", "factor", "minHistory"]
+        },
+        {
+          "description": "Fires when 'count' or more decisions on this row in the same group fall inside the window before this one, whatever their outcome. Attempts count: a burst of refused calls is itself a signal.",
+          "properties": {
+            "kind": { "const": "burst" },
+            "count": { "type": "integer", "minimum": 1 },
+            "window": { "$ref": "#/$defs/duration" },
+            "groupBy": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } }
+          },
+          "required": ["count", "window"]
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

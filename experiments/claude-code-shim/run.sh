@@ -13,6 +13,7 @@ cat > "$dir/guardian/guardian.json" <<JSON
 { "format": "vaom-guardian.config/0.1",
   "matrix": "$ROOT/schema/examples/incident.matrix.json",
   "binding": "$ROOT/schema/examples/incident.binding.json",
+  "scoring": ["$ROOT/schema/examples/remediation-gate.scoring.json", "$ROOT/schema/examples/incident-detection.scoring.json"],
   "dataDir": "data", "port": $port, "approvalTimeoutSeconds": 15,
   "activation": { "incident-agent": { "rows": ["remediation.restart"], "task": "INC-7" } } }
 JSON

@@ -1,0 +1,60 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "remediation-gate",
+  "version": "4.1",
+  "title": "Bounded remediation: rolling restart",
+  "approval": {
+    "role": "sre-lead",
+    "date": "2026-09-25",
+    "ref": "placeholder: remediation scoring policy sign-off"
+  },
+  "description": "VAOM v5 Section 7D: rule match high (on the bounded list; the service is stateless, so a restart is fully reversible), data completeness high, anomaly moderate. A restart loop on one incident is the anomaly this policy watches for. The pre-flight check is the verifier, outside this policy.",
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 0.3,
+      "floor": "must-pass",
+      "checks": [
+        {
+          "id": "incident-and-service",
+          "present": [
+            "task",
+            "stateless"
+          ]
+        }
+      ]
+    },
+    "ruleMatch": {
+      "weight": 0.5,
+      "floor": 1,
+      "rules": [
+        {
+          "id": "stateless",
+          "when": {
+            "fact": "stateless",
+            "op": "eq",
+            "value": true
+          },
+          "hard": true
+        }
+      ]
+    },
+    "anomaly": {
+      "weight": 0.2,
+      "floor": 0.5,
+      "signals": [
+        {
+          "id": "restart-loop",
+          "kind": "burst",
+          "count": 3,
+          "window": "PT1H",
+          "groupBy": [
+            "task"
+          ],
+          "penalty": 0.6,
+          "description": "Three or more restarts already attempted for this incident within the hour."
+        }
+      ]
+    }
+  }
+}

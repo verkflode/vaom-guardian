@@ -1,4 +1,5 @@
 import type { Finding } from "../lint/types.ts";
+import type { DimensionScore, Dimension, History, Level } from "../scoring/score.ts";
 
 export type Band = "A" | "B" | "C" | "non-delegable";
 
@@ -22,14 +23,20 @@ export interface Call {
   arguments: Record<string, unknown>;
   /** A capability the host or framework declared on the wire. Never grants authority; a mismatch makes the call unplaceable. */
   declaredCapability?: string;
+  /** The agent's own stated certainty, if the host passed one. A scoring policy may let it lower a score;
+   *  nothing lets it raise one. */
+  statedCertainty?: number;
 }
 
-/** A composite confidence score from a deployment's scoring policy. Never the agent's self-report. */
-export interface Score {
-  value: number;
+/** A placement's confidence score, as its row's scoring policy computed it. */
+export interface PlacementScore {
   policy: { id: string; version: string };
-  /** An independent verifier passed. Required for Band A on rows with verificationRequired. */
+  value: number;
+  level: Level;
+  cap?: "medium" | "low";
+  /** The verifier's verdict, when one was supplied. */
   verified?: boolean;
+  dimensions: Partial<Record<Dimension, DimensionScore>>;
 }
 
 export interface CapUsage {
@@ -40,8 +47,11 @@ export interface CapUsage {
 }
 
 export interface EvalContext {
-  /** Scores per capability the caller has scored. Absent means no score: the call routes at low. */
-  scores?: Record<string, Score>;
+  /** Decision history for anomaly signals. Absent: history can't be read, so every signal fires. */
+  history?: History;
+  /** An independent verifier's verdict per capability (VAOM v5 Section 8). Rows with verificationRequired
+   *  reach Band A only on a pass. The Guardian has no verifier channel yet and supplies none. */
+  verifications?: Record<string, boolean>;
   /** Usage of one row's cap for one group key. null means the history can't be read, which counts as breached.
    *  Cap ids are unique only within a row, so the row is part of the key. */
   capUsage(row: string, capId: string, groupKey: string): CapUsage | null;
@@ -86,6 +96,8 @@ export interface Placement {
   outcome: Outcome;
   approverRole?: string;
   facts: Record<string, FactValue>;
+  /** Absent for preparatory and non-delegable placements, and for any placement that stopped before scoring. */
+  score?: PlacementScore;
   reasons: Reason[];
 }
 
@@ -97,7 +109,7 @@ export interface Decision {
   placements: Placement[];
   reasons: Reason[];
   reservations: Reservation[];
-  policy: { matrix: { id: string; version: string }; binding: { id: string; version: string } };
+  policy: { matrix: { id: string; version: string }; binding: { id: string; version: string }; scoring?: { id: string; version: string }[] };
 }
 
 export type CompileResult = { ok: true; policy: Policy } | { ok: false; findings: Finding[] };
@@ -109,4 +121,6 @@ export interface Policy {
   binding: Validated;
   rowByCapability: ReadonlyMap<string, Validated>;
   rowById: ReadonlyMap<string, Validated>;
+  /** Scoring policies keyed "id@version", as rows cite them. */
+  scoring: ReadonlyMap<string, Validated>;
 }

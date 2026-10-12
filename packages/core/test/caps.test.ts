@@ -1,23 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { CapLedger, compilePolicy, ContextRegistry, decide, evaluate, resolveRecord, type Call, type DecideInput, type DecisionRecord, type Policy } from "../src/index.ts";
-import { binding, matrix02 } from "./helpers.ts";
+import { binding, matrix02, quietScoring } from "./helpers.ts";
 
 // invoice.approve has a per-vendor daily cap of EUR 5,000 (breach: review) and a ceiling of EUR 5,000.
+// Scoring without anomaly signals, so a fresh ledger's unfamiliar vendors don't decide the band here.
 const policy: Policy = (() => {
-  const r = compilePolicy(matrix02(), binding());
+  const r = compilePolicy(matrix02(), binding(), quietScoring());
   if (!r.ok) throw new Error("policy");
   return r.policy;
 })();
 const factKey = new Uint8Array(32).fill(9);
-const scores = { "erp:invoice.approve": { value: 0.95, policy: { id: "invoice-standard", version: "3.2" }, verified: true } };
-const approve = (amount: string, vendor = "V-7", id = "INV"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: id, vendor_id: vendor, amount, currency: "EUR" } });
+const verifications = { "erp:invoice.approve": true };
+const approve = (amount: string, vendor = "V-7", id = "INV"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: id, vendor_id: vendor, amount, currency: "EUR", po_number: "PO-1" } });
 
 let n = 0;
 // Each call runs under a context opened at its own time (contexts live 15 minutes; some tests span a day).
 const inputAt = (ts: string, extra: Partial<DecideInput> = {}): DecideInput => {
   const contexts = new ContextRegistry(policy);
   contexts.open({ id: `ctx-${n + 1}`, session: "s1", agent: { id: "ap-agent" }, rows: ["invoice.approve"] }, Date.parse(ts));
-  return { id: `dec-${++n}`, ts, agent: { id: "ap-agent" }, session: { id: "s1" }, scores, factKey, contexts, ...extra };
+  return { id: `dec-${++n}`, ts, agent: { id: "ap-agent" }, session: { id: "s1" }, verifications, factKey, contexts, ...extra };
 };
 const fresh = () => { const l = new CapLedger(); l.load([]); return l; };
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -38,9 +39,9 @@ describe("the parallel-split attack", () => {
     const ledger = fresh();
     const naive = async (id: string) => {
       const ts = "2026-10-02T09:00:00Z", now = Date.parse(ts);
-      const d = evaluate(policy, approve("3000", "V-7", id), { scores, contexts: [{ id: "c", rows: ["invoice.approve"] }], capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
+      const d = evaluate(policy, approve("3000", "V-7", id), { verifications, contexts: [{ id: "c", rows: ["invoice.approve"] }], capUsage: (row, cap, g) => ledger.usage(row, cap, g, now, 86_400_000) });
       await tick(); // e.g. awaiting a database write
-      ledger.reserve({ id, request: { ts }, reservations: d.reservations.map((r) => ({ cap: r.capId, row: r.row, group: r.groupKey, amount: r.amount!, count: 1 })) } as unknown as DecisionRecord);
+      ledger.reserve({ id, request: { ts }, decision: { placements: [] }, reservations: d.reservations.map((r) => ({ cap: r.capId, row: r.row, group: r.groupKey, amount: r.amount!, count: 1 })) } as unknown as DecisionRecord);
       return d;
     };
     const [a, b] = await Promise.all([naive("N-1"), naive("N-2")]);
@@ -51,7 +52,7 @@ describe("the parallel-split attack", () => {
 describe("what counts against a cap", () => {
   it("a pending review counts as used", () => {
     const ledger = fresh();
-    const big = decide(policy, approve("4500", "V-7", "I-1"), ledger, inputAt("2026-10-02T09:00:00Z", { scores: { "erp:invoice.approve": { ...scores["erp:invoice.approve"], value: 0.8 } } }));
+    const big = decide(policy, { ...approve("4500", "V-7", "I-1"), statedCertainty: 0.8 }, ledger, inputAt("2026-10-02T09:00:00Z"));
     expect(big.decision.outcome).toBe("review");
     expect(decide(policy, approve("1000", "V-7", "I-2"), ledger, inputAt("2026-10-02T09:01:00Z")).decision.band).toBe("B");
   });

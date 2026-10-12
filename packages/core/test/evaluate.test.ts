@@ -1,22 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { compilePolicy, evaluate, type CapUsage, type Decision, type EvalContext, type Policy } from "../src/index.ts";
-import { binding, matrix02, type Doc } from "./helpers.ts";
+import { compilePolicy, evaluate, type CapUsage, type Decision, type EvalContext, type History, type Policy } from "../src/index.ts";
+import { binding, matrix02, scoringPolicies, type Doc } from "./helpers.ts";
 
 // The invoice matrix 0.2 and its Claude Code binding. invoice.approve: routing high A / medium B / low C,
 // thresholds 0.92 / 0.70, scoring policy invoice-standard@3.2 with verification required, ceiling 5000 EUR
 // (over it: B), per-vendor daily cap 5000 EUR (breach: B), reviewer ap-clerk, escalation finance-controller.
-function compile(m: Doc = matrix02(), b: Doc = binding()): Policy {
-  const r = compilePolicy(m, b);
+//
+// invoice-standard@3.2: data completeness is a gate (amount, vendor, invoice, PO reference); rule match
+// (weight 0.5) is one hard rule, a PO is cited; anomaly (weight 0.5) loses 0.25 for an unfamiliar vendor,
+// 0.25 for an unusual amount, 0.5 for a burst. A familiar vendor at a usual amount scores 1.0; an
+// unfamiliar one 0.875, which is medium.
+function compile(m: Doc = matrix02(), b: Doc = binding(), s: Doc[] = scoringPolicies()): Policy {
+  const r = compilePolicy(m, b, s);
   if (!r.ok) throw new Error(`policy didn't compile: ${JSON.stringify(r.findings)}`);
   return r.policy;
 }
 
-const approveScore = (value: number, verified = true) => ({ "erp:invoice.approve": { value, policy: { id: "invoice-standard", version: "3.2" }, verified } });
+/** History in which vendor V-7 (and every other) is familiar and 3,000 EUR is a usual amount. */
+const familiar: History = { seen: () => true, values: () => [{ amount: "3000", currency: "EUR" }, { amount: "3000", currency: "EUR" }, { amount: "3000", currency: "EUR" }], count: () => 0 };
+const unfamiliar: History = { ...familiar, seen: () => false };
+const verified = { "erp:invoice.approve": true };
 
 function ctx(over: Partial<EvalContext> & { usage?: Record<string, CapUsage | null> } = {}): EvalContext {
   const usage = over.usage ?? {};
   return {
-    scores: over.scores ?? approveScore(0.94),
+    history: over.history ?? familiar,
+    verifications: over.verifications ?? verified,
     contexts: over.contexts ?? [{ id: "ctx-1", rows: ["invoice.approve", "invoice.duplicate-anomaly"] }],
     capUsage: (_row, capId, groupKey) => (`${capId} ${groupKey}` in usage ? usage[`${capId} ${groupKey}`]! : { total: "0", count: 0 }),
   };
@@ -24,13 +33,13 @@ function ctx(over: Partial<EvalContext> & { usage?: Record<string, CapUsage | nu
 
 const approve = (amount: unknown, extra: Record<string, unknown> = {}) => ({
   tool: "mcp__erp__approve_invoice",
-  arguments: { invoice_id: "INV-1", vendor_id: "V-7", amount, currency: "EUR", ...extra },
+  arguments: { invoice_id: "INV-1", vendor_id: "V-7", amount, currency: "EUR", po_number: "PO-1", ...extra },
 });
 const codes = (d: Decision) => d.reasons.map((r) => r.code);
 
 describe("compilePolicy", () => {
   it("compiles the invoice matrix and binding", () => {
-    expect(compilePolicy(matrix02(), binding()).ok).toBe(true);
+    expect(compilePolicy(matrix02(), binding(), scoringPolicies()).ok).toBe(true);
   });
   it("refuses a policy that doesn't lint clean", () => {
     const b = binding(); b.matrix.id = "someone.else";
@@ -47,7 +56,8 @@ describe("the worked example: invoice of EUR 3,200", () => {
     expect(d.outcome).toBe("allow");
     expect(d.band).toBe("A");
     expect(d.placements[0]!.row).toBe("invoice.approve");
-    expect(d.policy).toEqual({ matrix: { id: "example.ap.invoice", version: "1.1.0" }, binding: { id: "example.ap.invoice.claude-code", version: "0.2.0" } });
+    expect(d.policy).toEqual({ matrix: { id: "example.ap.invoice", version: "1.1.0" }, binding: { id: "example.ap.invoice.claude-code", version: "0.3.0" }, scoring: [{ id: "invoice-standard", version: "3.2" }] });
+    expect(d.placements[0]!.score).toEqual({ policy: { id: "invoice-standard", version: "3.2" }, value: 1, level: "high", verified: true, dimensions: { dataCompleteness: { score: 1 }, ruleMatch: { score: 1 }, anomaly: { score: 1 } } });
   });
 
   it("reserves its cap use, for the cap store to hold before allowing", () => {
@@ -56,41 +66,85 @@ describe("the worked example: invoice of EUR 3,200", () => {
   });
 
   it("without independent verification, Band A drops to review", () => {
-    const d = evaluate(p, approve("3200"), ctx({ scores: approveScore(0.94, false) }));
+    const d = evaluate(p, approve("3200"), ctx({ verifications: {} }));
     expect([d.outcome, d.band, d.approverRole]).toEqual(["review", "B", "ap-clerk"]);
     expect(codes(d)).toContain("verification.missing");
   });
 
-  it("medium confidence: review by the reviewer", () => {
-    const d = evaluate(p, approve("3200"), ctx({ scores: approveScore(0.8) }));
+  it("medium confidence (an unfamiliar vendor): review by the reviewer", () => {
+    const d = evaluate(p, approve("3200"), ctx({ history: unfamiliar }));
     expect([d.outcome, d.band, d.approverRole]).toEqual(["review", "B", "ap-clerk"]);
+    expect(d.placements[0]!.score).toMatchObject({ value: 0.875, level: "medium", dimensions: { anomaly: { score: 0.75, fired: ["unfamiliar-vendor"] } } });
   });
 
-  it("low confidence: escalation to the escalation role", () => {
-    const d = evaluate(p, approve("3200"), ctx({ scores: approveScore(0.5) }));
+  it("low confidence (no PO cited, so the data gate fails): escalation to the escalation role", () => {
+    const d = evaluate(p, approve("3200", { po_number: undefined }), ctx());
     expect([d.outcome, d.band, d.approverRole]).toEqual(["escalate", "C", "finance-controller"]);
+    expect(d.placements[0]!.score).toMatchObject({ level: "low", cap: "low", dimensions: { dataCompleteness: { score: 0, failed: ["inputs-present"] } } });
+    expect(codes(d)).toContain("confidence.gate");
   });
 
-  it("thresholds are inclusive: exactly 0.92 is high", () => {
-    expect(evaluate(p, approve("3200"), ctx({ scores: approveScore(0.92) })).band).toBe("A");
-    expect(evaluate(p, approve("3200"), ctx({ scores: approveScore(0.9199) })).band).toBe("B");
+  it("a floor breach caps the level at medium even when the composite clears the high threshold", () => {
+    // Anomaly floor raised to 0.8: an unfamiliar vendor (anomaly 0.75) breaches it. The composite, 0.875,
+    // clears a high threshold lowered to 0.85, so only the cap keeps this out of Band A.
+    const m = matrix02(); m.rows[0].authority.confidence.thresholds.high = 0.85;
+    const s = scoringPolicies(); s[0].dimensions.anomaly.floor = 0.8;
+    const d = evaluate(compile(m, binding(), s), approve("3200"), ctx({ history: unfamiliar }));
+    expect(d.placements[0]!.score).toMatchObject({ value: 0.875, level: "medium", cap: "medium" });
+    expect(d.band).toBe("B");
+    expect(codes(d)).toContain("confidence.floor");
+  });
+
+  it("thresholds are inclusive", () => {
+    const at = (high: number) => { const m = matrix02(); m.rows[0].authority.confidence.thresholds.high = high; return compile(m); };
+    expect(evaluate(at(0.875), approve("3200"), ctx({ history: unfamiliar })).band).toBe("A");
+    expect(evaluate(at(0.8751), approve("3200"), ctx({ history: unfamiliar })).band).toBe("B");
   });
 });
 
 describe("confidence never comes from the wrong place", () => {
   const p = compile();
-  it("no score routes at low", () => {
-    const d = evaluate(p, approve("3200"), ctx({ scores: {} }));
-    expect(d.band).toBe("C");
-    expect(codes(d)).toContain("confidence.no-score");
+  it("a matrix citing a scoring policy that isn't given doesn't compile", () => {
+    const r = compilePolicy(matrix02(), binding(), scoringPolicies().filter((s) => s.id !== "invoice-standard"));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.findings.map((f) => f.rule)).toContain("scoring.missing");
   });
-  it("a score from another scoring policy counts as no score", () => {
-    const d = evaluate(p, approve("3200"), ctx({ scores: { "erp:invoice.approve": { value: 0.99, policy: { id: "invoice-standard", version: "3.1" }, verified: true } } }));
-    expect(d.band).toBe("C");
-    expect(codes(d)).toContain("confidence.wrong-policy");
+  it("another version of the policy doesn't stand in for the cited one", () => {
+    const s = scoringPolicies(); s[0].version = "3.1";
+    const r = compilePolicy(matrix02(), binding(), s);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.findings.map((f) => f.rule)).toContain("scoring.missing");
   });
-  it("a non-finite score counts as invalid", () => {
-    expect(evaluate(p, approve("3200"), ctx({ scores: approveScore(Number.NaN) })).band).toBe("C");
+  it("a policy reading a fact the row's binding entries don't extract doesn't compile", () => {
+    const b = binding();
+    for (const t of b.tools) if (t.id === "approve-batch") delete t.items.facts.po_reference;
+    const r = compilePolicy(matrix02(), b, scoringPolicies());
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.findings.map((f) => f.rule)).toContain("scoring.fact-not-extracted");
+  });
+  it("the agent's stated certainty never raises a score", () => {
+    const d = evaluate(p, { ...approve("3200"), statedCertainty: 1 }, ctx({ history: unfamiliar }));
+    expect(d.placements[0]!.score?.value).toBe(0.875);
+    expect(d.band).toBe("B");
+  });
+  it("a lower stated certainty lowers the score; below its floor it caps the level", () => {
+    expect(evaluate(p, { ...approve("3200"), statedCertainty: 0.8 }, ctx()).placements[0]!.score).toMatchObject({ value: 0.8, level: "medium" });
+    const d = evaluate(p, { ...approve("3200"), statedCertainty: 0.65 }, ctx());
+    expect(d.band).toBe("C");
+    expect(codes(d)).toContain("confidence.certainty-floor");
+  });
+  it("a stated certainty that isn't a probability is ignored, never read as confidence", () => {
+    for (const c of [Number.NaN, 2, -1]) {
+      const d = evaluate(p, { ...approve("3200"), statedCertainty: c }, ctx({ history: unfamiliar }));
+      expect(d.band).toBe("B");
+      expect(codes(d)).toContain("confidence.certainty-invalid");
+    }
+  });
+  it("without history, every anomaly signal fires", () => {
+    const { history: _h, ...noHistory } = ctx();
+    const d = evaluate(p, approve("3200"), noHistory);
+    expect(d.placements[0]!.score?.dimensions.anomaly).toEqual({ score: 0, fired: ["unfamiliar-vendor", "unusual-amount", "approval-burst"] });
+    expect(d.band).toBe("C"); // 0.5 is low; the anomaly floor's cap (medium) never lifts it
   });
 });
 
@@ -122,7 +176,7 @@ describe("limits only narrow", () => {
     expect(codes(d)).not.toContain("ceiling.exceeded");
   });
   it("over the ceiling at low confidence stays at the stricter band", () => {
-    expect(evaluate(p, approve("6000"), ctx({ scores: approveScore(0.5) })).band).toBe("C");
+    expect(evaluate(p, approve("6000", { po_number: undefined }), ctx()).band).toBe("C");
   });
   it("a cumulative cap breach moves the call to review", () => {
     const d = evaluate(p, approve("3200"), ctx({ usage: { 'per-vendor-daily ["V-7"]': { total: "3000", count: 1 } } }));
@@ -152,7 +206,7 @@ describe("limits only narrow", () => {
 describe("batches can't slip under a ceiling or a cap", () => {
   const p = compile();
   const batch = (items: unknown[]) => ({ tool: "mcp__erp__approve_invoices", arguments: { invoices: items } });
-  const inv = (id: string, amount: string, vendor = "V-7") => ({ invoice_id: id, vendor_id: vendor, amount });
+  const inv = (id: string, amount: string, vendor = "V-7") => ({ invoice_id: id, vendor_id: vendor, amount, po_number: `PO-${id}` });
 
   it("three invoices of 2,000 to one vendor: the third breaches the daily cap", () => {
     const d = evaluate(p, batch([inv("A", "2000"), inv("B", "2000"), inv("C", "2000")]), ctx());
@@ -224,7 +278,7 @@ describe("refusal and conflict", () => {
     const m = matrix02(), b = binding();
     m.boundaries["no-contract-write"].intendedMechanism = "policy"; // otherwise the linter forbids mapping a tool to it
     b.tools.push({ id: "amend", match: { tool: "mcp__erp__amend_contract" }, capability: "erp:contract.write" });
-    const d = evaluate(compile(m, b), { tool: "mcp__erp__amend_contract", arguments: {} }, ctx({ scores: approveScore(0.99) }));
+    const d = evaluate(compile(m, b), { tool: "mcp__erp__amend_contract", arguments: {} }, ctx());
     expect([d.outcome, d.band]).toEqual(["refuse", "non-delegable"]);
   });
   it("a refusal beats any other placement in the same call", () => {
@@ -240,7 +294,7 @@ describe("refusal and conflict", () => {
     m.roles["ap-lead"] = { title: "AP lead" };
     m.rows[1].authority.reviewer = "ap-lead";
     b.tools.push({ id: "approve-also-flags", match: { tool: "mcp__erp__approve_invoice" }, capability: "erp:invoice.flag", facts: { task: { arg: "/invoice_id" } } });
-    const d = evaluate(compile(m, b), approve("3200"), ctx({ scores: { ...approveScore(0.8), "erp:invoice.flag": { value: 0.95, policy: { id: "invoice-duplicate", version: "1.0" } } } }));
+    const d = evaluate(compile(m, b), approve("3200"), ctx({ history: unfamiliar }));
     expect(d.outcome).toBe("unplaceable");
     expect(codes(d)).toContain("approver.conflict");
   });

@@ -24,6 +24,8 @@ Rerun: `./run.sh <scenario>`. Each run prints one row, and its files are left in
 
 Raw rows are in `results.tsv`. `vaom-guardian verify` reports no problems for any run that left evidence.
 
+These runs predate scoring policies (2026-10-12). Back then no score meant low confidence, so the restart escalated to Band C. `run.sh` now loads the example scoring policies: the same restart scores high, but its row requires an independent verifier the Guardian doesn't have, so it goes to Band B for review by `sre-lead`. The rows above haven't been rerun since.
+
 ## Findings
 
 1. **Every path ends in an explicit answer that Claude Code obeys.** That covers an allow, a deny, an unmapped tool, an ask that expires, bypass mode and a stopped Guardian. In `ask-expires` the hook held the call for the whole approval window and then denied it. The model reported "the approval request to head-of-engineering expired" and didn't retry.

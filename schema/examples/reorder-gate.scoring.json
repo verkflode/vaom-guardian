@@ -1,0 +1,89 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "reorder-gate",
+  "version": "1.3",
+  "title": "Catalogue re-order under the monthly mandate",
+  "approval": {
+    "role": "procurement-manager",
+    "date": "2026-10-01",
+    "ref": "placeholder: purchasing scoring policy sign-off"
+  },
+  "description": "VAOM v5 Section 7E. Rules confirm what the cart itself says: a framework supplier, an approved category, a current price list. The price check against the framework list is the verifier, outside this policy. A burst of orders to one supplier in a day is the anomaly watched for.",
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 0.2,
+      "floor": "must-pass",
+      "checks": [
+        {
+          "id": "cart-complete",
+          "present": [
+            "task",
+            "total",
+            "supplier",
+            "category",
+            "price_list_current"
+          ]
+        }
+      ]
+    },
+    "ruleMatch": {
+      "weight": 0.5,
+      "floor": 1,
+      "rules": [
+        {
+          "id": "framework-supplier",
+          "when": {
+            "fact": "supplier",
+            "op": "in",
+            "value": [
+              "supplier-a",
+              "supplier-b",
+              "supplier-c"
+            ]
+          },
+          "hard": true
+        },
+        {
+          "id": "approved-category",
+          "when": {
+            "fact": "category",
+            "op": "in",
+            "value": [
+              "consumables",
+              "spare-parts",
+              "cutting-fluids",
+              "safety"
+            ]
+          },
+          "hard": true
+        },
+        {
+          "id": "price-list-current",
+          "when": {
+            "fact": "price_list_current",
+            "op": "eq",
+            "value": true
+          },
+          "hard": true
+        }
+      ]
+    },
+    "anomaly": {
+      "weight": 0.3,
+      "floor": 0.5,
+      "signals": [
+        {
+          "id": "order-burst",
+          "kind": "burst",
+          "count": 10,
+          "window": "P1D",
+          "groupBy": [
+            "supplier"
+          ],
+          "penalty": 0.5
+        }
+      ]
+    }
+  }
+}

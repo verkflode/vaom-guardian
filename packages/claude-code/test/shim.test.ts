@@ -38,6 +38,7 @@ async function guardian(dir = mkdtempSync(join(tmpdir(), "vaom-shim-")), port?: 
     format: "vaom-guardian.config/0.1",
     matrix: join(examples, "incident.matrix.json"),
     binding: join(examples, "incident.binding.json"),
+    scoring: ["remediation-gate", "incident-detection"].map((s) => join(examples, `${s}.scoring.json`)),
     dataDir: "data",
     port: p,
     approvalTimeoutSeconds: 30,
@@ -199,15 +200,15 @@ describe("PreToolUse decisions", () => {
 describe("asks: the Guardian is the approver", () => {
   it("waits for a WebAuthn approval, allows, and leaves evidence that verifies", async () => {
     const r = await guardian();
-    const auth = await enroll(r, ["head-of-engineering"]);
+    const auth = await enroll(r, ["sre-lead"]);
     const o = shim(r);
     const call = restart();
     const [out] = await Promise.all([runHook(call, o), decideOnPage(r, "approve", auth)]);
     expect(decision(out), JSON.stringify(out)).toBe("allow");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/approved by head-of-engineering/);
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/approved by sre-lead/);
     expect(await runHook(post(call), o)).toBeNull();
     const rec = r.g.store.records().filter((x) => x.request.action.tool === "mcp__deploy__rolling_restart").at(-1)!;
-    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "head-of-engineering" } });
+    expect(rec.resolution).toMatchObject({ result: "executed", approval: { approver_role: "sre-lead" } });
     expect(verifyEvidence(new Store(r.g.config.dataDir), r.g.origin)).toMatchObject({ approvals: 1, problems: [] });
   });
 

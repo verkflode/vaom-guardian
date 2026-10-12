@@ -1,0 +1,25 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "invoice-duplicate",
+  "version": "1.0",
+  "title": "Duplicate invoice flag",
+  "approval": {
+    "role": "ap-owner",
+    "date": "2026-09-15"
+  },
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 1,
+      "floor": "must-pass",
+      "checks": [
+        {
+          "id": "invoice-named",
+          "present": [
+            "task"
+          ]
+        }
+      ]
+    }
+  }
+}

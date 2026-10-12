@@ -1,16 +1,19 @@
 // VAOM v5's worked examples 7B, 7D and 7E, run end to end through the core. Each case quotes the
 // whitepaper sentence it checks. Figures the paper doesn't state are illustrative in the example matrices
-// (and say so there); these tests assert only outcomes the paper states.
+// and scoring policies (and say so there); these tests assert only outcomes the paper states. Scores are
+// computed from each row's scoring policy; the paper's composites (0.83, 0.93, 0.95) are its own policies'
+// outputs and aren't reproduced, only the bands they lead to.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CapLedger, compilePolicy, ContextRegistry, decide, LeaseRegistry, lintBinding, lintMatrix, resolveRecord, type Call, type DecideInput, type Policy, type Score } from "../src/index.ts";
+import { CapLedger, compilePolicy, ContextRegistry, decide, LeaseRegistry, lintBinding, lintMatrix, resolveRecord, type Call, type DecideInput, type Policy } from "../src/index.ts";
+import { scoringPolicies } from "./helpers.ts";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const load = (f: string): any => JSON.parse(readFileSync(join(examples, f), "utf8"));
 function compile(name: string): Policy {
-  const r = compilePolicy(load(`${name}.matrix.json`), load(`${name}.binding.json`));
+  const r = compilePolicy(load(`${name}.matrix.json`), load(`${name}.binding.json`), scoringPolicies());
   if (!r.ok) throw new Error(`${name} didn't compile: ${JSON.stringify(r.findings)}`);
   return r.policy;
 }
@@ -19,8 +22,8 @@ const at = (iso: string) => Date.parse(iso);
 let seq = 0;
 const base = (ts: string, extra: Partial<DecideInput> = {}): DecideInput => ({ id: `d-${++seq}`, ts, agent: { id: "agent" }, session: { id: "s1" }, factKey, ...extra });
 const loaded = () => { const l = new CapLedger(); l.load([]); return l; };
-const score = (capability: string, value: number, policy: [string, string], verified = true): Record<string, Score> =>
-  ({ [capability]: { value, policy: { id: policy[0], version: policy[1] }, verified } });
+/** The independent verifier's verdict (VAOM v5 Section 8). The Guardian has no verifier channel yet; the core takes one. */
+const verdict = (capability: string, passed = true): Pick<DecideInput, "verifications"> => ({ verifications: { [capability]: passed } });
 
 describe("all three worked examples lint clean", () => {
   for (const name of ["aml", "incident", "purchasing"]) {
@@ -35,27 +38,30 @@ describe("all three worked examples lint clean", () => {
 describe("7B: AML transaction triage", () => {
   const p = compile("aml");
   const T = "2026-10-05T08:00:00Z";
-  const dismissScore = (v: number, verified = true) => score("cms:alert.dismiss", v, ["aml-dismissal", "2.0"], verified);
+  const checked = (passed = true) => verdict("cms:alert.dismiss", passed);
   const open = (task?: string) => { const c = new ContextRegistry(p); c.open({ id: `ctx-${++seq}`, session: "s1", agent: { id: "aml-agent" }, rows: ["alert.dismiss", "sar.determine"], ...(task ? { task } : {}) }, at(T)); return c; };
-  const alert = (id: string, amount: string, flags: { pep?: boolean; sanctioned?: boolean } = {}) =>
-    ({ alert_id: id, amount, currency: "EUR", pep: flags.pep ?? false, sanctioned_jurisdiction: flags.sanctioned ?? false });
+  const alert = (id: string, amount: string, flags: { pep?: boolean; sanctioned?: boolean; pattern?: string } = {}) =>
+    ({ alert_id: id, amount, currency: "EUR", pattern: flags.pattern ?? "salary", pep: flags.pep ?? false, sanctioned_jurisdiction: flags.sanctioned ?? false });
   const dismiss = (a: ReturnType<typeof alert>): Call => ({ tool: "mcp__cms__dismiss_alert", arguments: a });
 
   it('"Composite confidence: 0.83, routing to Band B (human review)": the structuring alert goes to an investigator', () => {
-    const r = decide(p, dismiss(alert("ALR-1", "9500")), loaded(), base(T, { contexts: open("ALR-1"), scores: dismissScore(0.83) }));
+    const r = decide(p, dismiss(alert("ALR-1", "9500", { pattern: "structuring" })), loaded(), base(T, { contexts: open("ALR-1"), ...checked() }));
     expect([r.decision.outcome, r.decision.band, r.decision.approver_role]).toEqual(["review", "B", "aml-investigator"]);
+    // "rule match strength is high (the deposit pattern matches structuring typology)": for a dismissal, a
+    // structuring match is the rule that fails, and a failed hard rule caps the level whatever else scores.
+    expect(r.decision.placements[0]!.score).toMatchObject({ level: "medium", cap: "medium", dimensions: { ruleMatch: { failed: ["known-false-positive"] } } });
   });
 
   it('"a batch of 200 alerts ... Band A routing permits auto-dismissal": all 200 dismissed in Band A', () => {
     const alerts = Array.from({ length: 200 }, (_, i) => alert(`ALR-${100 + i}`, String(50 + i)));
-    const r = decide(p, { tool: "mcp__cms__dismiss_alerts", arguments: { alerts } }, loaded(), base(T, { contexts: open(), scores: dismissScore(0.96) }));
+    const r = decide(p, { tool: "mcp__cms__dismiss_alerts", arguments: { alerts } }, loaded(), base(T, { contexts: open(), ...checked() }));
     expect(r.decision.outcome).toBe("allow");
     expect(r.decision.placements).toHaveLength(200);
     expect(new Set(r.decision.placements.map((x) => x.band))).toEqual(new Set(["A"]));
   });
 
   it('"independent verification, where a deterministic checker confirms each dismissal criterion": without it, no Band A', () => {
-    const r = decide(p, dismiss(alert("ALR-2", "120")), loaded(), base(T, { contexts: open(), scores: dismissScore(0.97, false) }));
+    const r = decide(p, dismiss(alert("ALR-2", "120")), loaded(), base(T, { contexts: open(), ...checked(false) }));
     expect(r.decision.band).toBe("B");
   });
 
@@ -65,18 +71,18 @@ describe("7B: AML transaction triage", () => {
     ["an amount exceeding the regulatory reporting threshold", alert("ALR-5", "10500")],
   ] as const) {
     it(`"no alert may be auto-dismissed if it involves ${label}": refused, whatever the score`, () => {
-      const r = decide(p, dismiss(a), loaded(), base(T, { contexts: open(), scores: dismissScore(0.99) }));
+      const r = decide(p, dismiss(a), loaded(), base(T, { contexts: open(), ...checked() }));
       expect([r.decision.outcome, r.decision.band]).toEqual(["refuse", "non-delegable"]);
     });
   }
 
   it("one PEP alert in a batch refuses the whole call: the strictest placement wins", () => {
     const alerts = [alert("ALR-6", "60"), alert("ALR-7", "70", { pep: true }), alert("ALR-8", "80")];
-    expect(decide(p, { tool: "mcp__cms__dismiss_alerts", arguments: { alerts } }, loaded(), base(T, { contexts: open(), scores: dismissScore(0.99) })).decision.outcome).toBe("refuse");
+    expect(decide(p, { tool: "mcp__cms__dismiss_alerts", arguments: { alerts } }, loaded(), base(T, { contexts: open(), ...checked() })).decision.outcome).toBe("refuse");
   });
 
   it('"The regulated determination itself ... stays non-delegable": no SAR tool is mapped, and none may be', () => {
-    const r = decide(p, { tool: "mcp__fiu__file_sar", arguments: { alert_id: "ALR-1" } }, loaded(), base(T, { contexts: open(), scores: dismissScore(0.99) }));
+    const r = decide(p, { tool: "mcp__fiu__file_sar", arguments: { alert_id: "ALR-1" } }, loaded(), base(T, { contexts: open(), ...checked() }));
     expect(r.decision.outcome).toBe("unplaceable");
     const b = load("aml.binding.json");
     b.tools.push({ id: "file-sar", match: { tool: "mcp__fiu__file_sar" }, capability: "fiu:sar.file" });
@@ -104,7 +110,7 @@ describe("7B: AML transaction triage", () => {
 describe("7D: autonomous incident remediation", () => {
   const p = compile("incident");
   const T0 = "2026-10-05T02:14:00Z";
-  const restartScore = (v: number, verified = true) => score("deploy:service.rolling-restart", v, ["remediation-gate", "4.1"], verified);
+  const preflight = (passed = true) => verdict("deploy:service.rolling-restart", passed);
   const restart = (stateless = true): Call => ({ tool: "mcp__deploy__rolling_restart", arguments: { incident_id: "INC-42", service: "orders", stateless } });
   const minutes = (n: number) => new Date(at(T0) + n * 60_000).toISOString();
   const activate = () => {
@@ -125,28 +131,35 @@ describe("7D: autonomous incident remediation", () => {
     // The lease covers only its own scopes: drafting a config change is preparatory, but not in the lease.
     expect(asMonitor({ tool: "mcp__change__draft_proposal", arguments: { change: "x" } }).decision.outcome).toBe("unplaceable");
     const declare: Call = { tool: "mcp__incident__declare", arguments: { alert_id: "ALERT-0214" } };
-    const s = score("incident:declare", 0.9, ["incident-detection", "1.0"]);
-    expect(asMonitor(declare, { scores: s }).decision.outcome).toBe("unplaceable");
+    expect(asMonitor(declare).decision.outcome).toBe("unplaceable");
     const resp = leases.respond("monitor", { contextId: "resp-0214", session: "mon", alert: "ALERT-0214" }, at(T0));
     expect(resp.ok).toBe(true);
-    expect(asMonitor(declare, { scores: s }).decision.outcome).toBe("allow");
+    expect(asMonitor(declare).decision.outcome).toBe("allow");
   });
 
   it('"Composite: 0.93, Band A. The restart is within delegated authority."', () => {
     const { contexts } = activate();
-    const r = decide(p, restart(), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, scores: restartScore(0.93) }));
+    const r = decide(p, restart(), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, ...preflight() }));
     expect([r.decision.outcome, r.decision.band]).toEqual(["allow", "A"]);
     expect(r.request.context?.id).toBe("remediate-INC-42");
   });
 
   it('"independent verification passes: a deterministic pre-flight check": without it, no Band A', () => {
     const { contexts } = activate();
-    expect(decide(p, restart(), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, scores: restartScore(0.93, false) })).decision.band).toBe("B");
+    expect(decide(p, restart(), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, ...preflight(false) })).decision.band).toBe("B");
+  });
+
+  it("a restart loop on one incident is an anomaly: the fourth restart within the hour goes to review", () => {
+    // Not in the paper's narrative; it's what the example scoring policy's anomaly dimension watches for.
+    const { contexts } = activate();
+    const ledger = loaded();
+    const bands = [5, 6, 7, 8].map((m) => decide(p, restart(), ledger, base(minutes(m), { session: { id: "rem" }, contexts, ...preflight() })).decision.band);
+    expect(bands).toEqual(["A", "A", "A", "B"]);
   });
 
   it('"the service is stateless": a stateful service is off the bounded list and escalates', () => {
     const { contexts } = activate();
-    expect(decide(p, restart(false), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, scores: restartScore(0.99) })).decision.outcome).toBe("escalate");
+    expect(decide(p, restart(false), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, ...preflight() })).decision.outcome).toBe("escalate");
   });
 
   describe('"It spawns two sub-agents within pre-approved spawn patterns"', () => {
@@ -166,9 +179,9 @@ describe("7D: autonomous incident remediation", () => {
     it("a reader can read telemetry but can't restart, even under the restart row's context", () => {
       const { contexts } = activate();
       contexts.derive("remediate-INC-42", { id: "logs", session: "sub-logs", agent: { id: "log-analysis-1" }, rows: ["remediation.restart"], subagentType: "log-analysis" }, at(minutes(1)));
-      const asReader = (call: Call, s?: Record<string, Score>) => decide(p, call, loaded(), base(minutes(3), { session: { id: "sub-logs" }, contexts, ...(s ? { scores: s } : {}) }));
+      const asReader = (call: Call) => decide(p, call, loaded(), base(minutes(3), { session: { id: "sub-logs" }, contexts, ...preflight() }));
       expect(asReader({ tool: "mcp__telemetry__query", arguments: { service: "orders" } }).decision.outcome).toBe("allow");
-      const r = asReader(restart(), restartScore(0.99));
+      const r = asReader(restart());
       expect(r.decision.outcome).toBe("unplaceable");
       expect(r.decision.reasons.map((x) => x.code)).toContain("context.scope");
     });
@@ -198,14 +211,14 @@ describe("7D: autonomous incident remediation", () => {
 
   it("the delegated execution context ends at 60 minutes: after that, no authority to restart", () => {
     const { contexts } = activate();
-    expect(decide(p, restart(), loaded(), base(minutes(61), { session: { id: "rem" }, contexts, scores: restartScore(0.99) })).decision.outcome).toBe("unplaceable");
+    expect(decide(p, restart(), loaded(), base(minutes(61), { session: { id: "rem" }, contexts, ...preflight() })).decision.outcome).toBe("unplaceable");
   });
 });
 
 describe("7E: delegated purchasing", () => {
   const p = compile("purchasing");
   const MONTH = "2026-10-01T07:00:00Z";
-  const reorderScore = (v: number, verified = true) => score("shop:order.place", v, ["reorder-gate", "1.3"], verified);
+  const cartCheck = (passed = true) => verdict("shop:order.place", passed);
   const order = (id: string, total: string, o: { supplier?: string; category?: string; current?: boolean } = {}): Call => ({
     tool: "mcp__shop__place_order",
     arguments: { requisition_id: id, total, currency: "EUR", supplier: o.supplier ?? "supplier-a", category: o.category ?? "consumables", price_list_current: o.current ?? true },
@@ -216,26 +229,26 @@ describe("7E: delegated purchasing", () => {
   function midMonth() {
     const contexts = mandate(), ledger = loaded();
     const earlier = ["2500", "2500", "2500", "2500", "2500", "1200"];
-    earlier.forEach((t, i) => decide(p, order(`REQ-E${i}`, t), ledger, base(`2026-10-0${2 + i}T09:00:00Z`, { session: { id: "proc" }, contexts, scores: reorderScore(0.97) })));
-    return { contexts, ledger, input: (ts: string, s: Record<string, Score>) => base(ts, { session: { id: "proc" }, contexts, scores: s }) };
+    earlier.forEach((t, i) => decide(p, order(`REQ-E${i}`, t), ledger, base(`2026-10-0${2 + i}T09:00:00Z`, { session: { id: "proc" }, contexts, ...cartCheck() })));
+    return { contexts, ledger, input: (ts: string, v = cartCheck()) => base(ts, { session: { id: "proc" }, contexts, ...v }) };
   }
   const T = "2026-10-12T10:00:00Z";
 
   it('"Composite: 0.95, against this decision type\'s calibrated threshold of 0.93. Band A. The order totals €1,840."', () => {
     const { ledger, input } = midMonth();
-    const r = decide(p, order("REQ-101", "1840"), ledger, input(T, reorderScore(0.95)));
+    const r = decide(p, order("REQ-101", "1840"), ledger, input(T));
     expect([r.decision.outcome, r.decision.band]).toEqual(["allow", "A"]);
   });
 
   it('"a replacement spindle motor at €3,900 ... exceeds the per-order ceiling. Band B"', () => {
     const { ledger, input } = midMonth();
-    const r = decide(p, order("REQ-102", "3900", { category: "spare-parts" }), ledger, input(T, reorderScore(0.97)));
+    const r = decide(p, order("REQ-102", "3900", { category: "spare-parts" }), ledger, input(T));
     expect([r.decision.outcome, r.decision.band, r.decision.approver_role]).toEqual(["review", "B", "procurement-manager"]);
   });
 
   it('"The signature is the Band B approval record": the motor executes on the procurement manager\'s approval', () => {
     const { ledger, input } = midMonth();
-    const r = decide(p, order("REQ-102", "3900", { category: "spare-parts" }), ledger, input(T, reorderScore(0.97)));
+    const r = decide(p, order("REQ-102", "3900", { category: "spare-parts" }), ledger, input(T));
     expect(() => resolveRecord(r, { ts: "2026-10-12T10:20:00Z", result: "executed" })).toThrow();
     const done = resolveRecord(r, { ts: "2026-10-12T10:20:00Z", result: "executed", approval: { approver_role: "procurement-manager", record: "signed-cart-REQ-102" } });
     expect(done.resolution?.result).toBe("executed");
@@ -243,24 +256,24 @@ describe("7E: delegated purchasing", () => {
 
   it('"Supplier C\'s price list is past its review-by date, so C\'s offer cannot support a Band A decision"', () => {
     const { ledger, input } = midMonth();
-    expect(decide(p, order("REQ-103", "1700", { supplier: "supplier-c", current: false }), ledger, input(T, reorderScore(0.97))).decision.band).toBe("B");
+    expect(decide(p, order("REQ-103", "1700", { supplier: "supplier-c", current: false }), ledger, input(T)).decision.band).toBe("B");
   });
 
   it('"the three framework suppliers only": anyone else needs review', () => {
     const { ledger, input } = midMonth();
-    expect(decide(p, order("REQ-104", "300", { supplier: "supplier-z" }), ledger, input(T, reorderScore(0.97))).decision.band).toBe("B");
+    expect(decide(p, order("REQ-104", "300", { supplier: "supplier-z" }), ledger, input(T)).decision.band).toBe("B");
   });
 
   it('"a cumulative ceiling of €20,000 for the month": an order past the remaining balance needs review', () => {
     const { ledger, input } = midMonth();
-    expect(decide(p, order("REQ-105", "1840"), ledger, input(T, reorderScore(0.95))).decision.band).toBe("A"); // 15,540 used
-    expect(decide(p, order("REQ-106", "2400"), ledger, input("2026-10-12T11:00:00Z", reorderScore(0.95))).decision.band).toBe("A"); // 17,940
-    expect(decide(p, order("REQ-107", "2400"), ledger, input("2026-10-12T12:00:00Z", reorderScore(0.95))).decision.band).toBe("B"); // 20,340
+    expect(decide(p, order("REQ-105", "1840"), ledger, input(T)).decision.band).toBe("A"); // 15,540 used
+    expect(decide(p, order("REQ-106", "2400"), ledger, input("2026-10-12T11:00:00Z")).decision.band).toBe("A"); // 17,940
+    expect(decide(p, order("REQ-107", "2400"), ledger, input("2026-10-12T12:00:00Z")).decision.band).toBe("B"); // 20,340
   });
 
   it('"Supplier onboarding and changes to framework terms are non-delegable": no tool, and none may be mapped', () => {
     const { ledger, input } = midMonth();
-    expect(decide(p, { tool: "mcp__erp__onboard_supplier", arguments: { name: "New Co" } }, ledger, input(T, {})).decision.outcome).toBe("unplaceable");
+    expect(decide(p, { tool: "mcp__erp__onboard_supplier", arguments: { name: "New Co" } }, ledger, input(T)).decision.outcome).toBe("unplaceable");
     const b = load("purchasing.binding.json");
     b.tools.push({ id: "onboard", match: { tool: "mcp__erp__onboard_supplier" }, capability: "erp:supplier.onboard" });
     expect(lintBinding(b, load("purchasing.matrix.json")).findings.map((f) => f.rule)).toContain("boundary.tool-present");
@@ -268,7 +281,7 @@ describe("7E: delegated purchasing", () => {
 
   it('"authority with a hard maximum lifetime, renewed only by a human": once the mandate lapses, nothing can be bought', () => {
     const contexts = mandate();
-    const r = decide(p, order("REQ-200", "100"), loaded(), base("2026-11-02T09:00:00Z", { session: { id: "proc" }, contexts, scores: reorderScore(0.99) }));
+    const r = decide(p, order("REQ-200", "100"), loaded(), base("2026-11-02T09:00:00Z", { session: { id: "proc" }, contexts, ...cartCheck() }));
     expect(r.decision.outcome).toBe("unplaceable");
   });
 });

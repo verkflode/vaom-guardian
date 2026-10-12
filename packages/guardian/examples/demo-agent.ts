@@ -1,5 +1,6 @@
 // A stand-in agent for trying the approval page: negotiates, starts a session, asks to restart a service
-// for incident INC-7 (Band C without a scorer, so it escalates), waits for the human's decision, and
+// for incident INC-7 (Band B: the score is high, but the row needs an independent verifier and the Guardian
+// has none, so it goes to the SRE lead for review), waits for the human's decision, and
 // reports the execution. Run it while the Guardian is serving examples/incident.guardian.json:
 //   node packages/guardian/examples/demo-agent.ts
 import { randomUUID } from "node:crypto";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compilePolicy, ContextRegistry, evaluate, LeaseRegistry, type Health, type LiveContext, type Policy } from "../src/index.ts";
-import { binding, matrix02, type Doc } from "./helpers.ts";
+import { binding, matrix02, quietScoring, type Doc } from "./helpers.ts";
 
 // The invoice matrix, plus sub-agent limits on invoice.approve and a lease on invoice.duplicate-anomaly
 // (a continuous duplicate monitor). The compiled policy is lint-checked like any other.
@@ -9,7 +9,7 @@ function policyWith(mutate: (m: Doc) => void = () => {}): Policy {
   m.rows[0].authority.chain = { maxDepth: 1, maxFanOut: 2, allowedSubagents: [{ type: "reader", capabilities: ["erp:invoice.flag"], maxLifetime: "PT5M", maxCount: 1 }] };
   m.rows[1].authority.lease = { observationCapabilities: ["erp:invoice.read", "erp:vendor.read"], lifetime: "PT1H", maxLifetime: "P30D", responseContextLifetime: "PT10M" };
   mutate(m);
-  const r = compilePolicy(m, binding());
+  const r = compilePolicy(m, binding(), quietScoring());
   if (!r.ok) throw new Error(`policy: ${JSON.stringify(r.findings)}`);
   return r.policy;
 }
@@ -107,9 +107,9 @@ describe("deriving sub-agent contexts: attenuation only", () => {
 
 describe("the evaluator needs a context", () => {
   const p = policyWith();
-  const scores = { "erp:invoice.approve": { value: 0.95, policy: { id: "invoice-standard", version: "3.2" }, verified: true } };
+  const verifications = { "erp:invoice.approve": true };
   const run = (contexts: LiveContext[], invoice = "INV-1") =>
-    evaluate(p, { tool: "mcp__erp__approve_invoice", arguments: { invoice_id: invoice, vendor_id: "V-7", amount: "100", currency: "EUR" } }, { scores, contexts, capUsage: () => ({ total: "0", count: 0 }) });
+    evaluate(p, { tool: "mcp__erp__approve_invoice", arguments: { invoice_id: invoice, vendor_id: "V-7", amount: "100", currency: "EUR", po_number: "PO-1" } }, { verifications, contexts, capUsage: () => ({ total: "0", count: 0 }) });
 
   it("no context covering the row: unplaceable, for that reason", () => {
     // Pinned to the reason: the task check would also reject these, and must not be what's tested here.

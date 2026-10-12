@@ -1,0 +1,25 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "incident-detection",
+  "version": "1.0",
+  "title": "Incident declaration from an alert",
+  "approval": {
+    "role": "sre-lead",
+    "date": "2026-09-25"
+  },
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 1,
+      "floor": "must-pass",
+      "checks": [
+        {
+          "id": "alert-named",
+          "present": [
+            "task"
+          ]
+        }
+      ]
+    }
+  }
+}

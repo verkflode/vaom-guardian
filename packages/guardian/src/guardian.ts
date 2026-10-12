@@ -18,6 +18,8 @@ export interface GuardianFileConfig {
   format: typeof CONFIG_FORMAT;
   matrix: string;
   binding: string;
+  /** Scoring policy files; every one a matrix row cites must be here, or the Guardian won't start. */
+  scoring?: string[];
   dataDir: string;
   port: number;
   approvalTimeoutSeconds?: number;
@@ -26,7 +28,7 @@ export interface GuardianFileConfig {
   activation?: Record<string, Activation>;
 }
 
-const KEYS = new Set(["$schema", "format", "matrix", "binding", "dataDir", "port", "approvalTimeoutSeconds", "skewWindowMs", "activation"]);
+const KEYS = new Set(["$schema", "format", "matrix", "binding", "scoring", "dataDir", "port", "approvalTimeoutSeconds", "skewWindowMs", "activation"]);
 
 export function readConfig(path: string): GuardianFileConfig {
   const c = JSON.parse(readFileSync(path, "utf8"));
@@ -34,6 +36,7 @@ export function readConfig(path: string): GuardianFileConfig {
   if (c?.format !== CONFIG_FORMAT) throw bad(`format must be ${CONFIG_FORMAT}`);
   for (const k of Object.keys(c)) if (!KEYS.has(k)) throw bad(`unknown key ${k}`);
   for (const k of ["matrix", "binding", "dataDir"]) if (typeof c[k] !== "string") throw bad(`${k} must be a path`);
+  if (c.scoring !== undefined && !(Array.isArray(c.scoring) && c.scoring.every((s: unknown) => typeof s === "string"))) throw bad("scoring must be a list of paths");
   if (!Number.isInteger(c.port) || c.port < 1024 || c.port > 65535) throw bad("port must be an integer from 1024 to 65535");
   if (c.approvalTimeoutSeconds !== undefined && !(Number.isInteger(c.approvalTimeoutSeconds) && c.approvalTimeoutSeconds >= 10 && c.approvalTimeoutSeconds <= 540)) throw bad("approvalTimeoutSeconds must be 10 to 540 (under Claude Code's 600 s hook limit)");
   if (c.skewWindowMs !== undefined && !(Number.isInteger(c.skewWindowMs) && c.skewWindowMs >= 1000 && c.skewWindowMs <= 300_000)) throw bad("skewWindowMs must be 1000 to 300000");
@@ -42,7 +45,7 @@ export function readConfig(path: string): GuardianFileConfig {
     for (const k of Object.keys(a)) if (!["rows", "scopes", "task"].includes(k)) throw bad(`activation.${agent}: unknown key ${k}`);
   }
   const base = dirname(resolve(path));
-  return { ...c, matrix: resolve(base, c.matrix), binding: resolve(base, c.binding), dataDir: resolve(base, c.dataDir) };
+  return { ...c, matrix: resolve(base, c.matrix), binding: resolve(base, c.binding), ...(c.scoring ? { scoring: c.scoring.map((s: string) => resolve(base, s)) } : {}), dataDir: resolve(base, c.dataDir) };
 }
 
 export interface Guardian {
@@ -61,8 +64,9 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
   const binding = JSON.parse(readFileSync(config.binding, "utf8"));
   const lint = lintMatrix(matrix);
   if (!lint.ok) throw new Error(`matrix doesn't lint: ${lint.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
-  const compiled = compilePolicy(matrix, binding);
-  if (!compiled.ok) throw new Error(`binding doesn't compile: ${compiled.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
+  const scoring = (config.scoring ?? []).map((f) => JSON.parse(readFileSync(f, "utf8")));
+  const compiled = compilePolicy(matrix, binding, scoring);
+  if (!compiled.ok) throw new Error(`policy doesn't compile: ${compiled.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
   const policy = compiled.policy;
   for (const [agent, a] of Object.entries(config.activation ?? {})) {
     const unknown = a.rows.filter((r) => !policy.rowById.has(r));

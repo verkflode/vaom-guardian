@@ -1,24 +1,20 @@
 import { createHash, createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildRecord, canonicalize, checkRecord, compilePolicy, evaluate, RecordError, resolveRecord, type Call, type EvalContext, type Policy, type RecordInput } from "../src/index.ts";
-import { binding, matrix02 } from "./helpers.ts";
+import { binding, matrix02, quietScoring } from "./helpers.ts";
 
 const policy: Policy = (() => {
-  const r = compilePolicy(matrix02(), binding());
+  const r = compilePolicy(matrix02(), binding(), quietScoring());
   if (!r.ok) throw new Error("policy");
   return r.policy;
 })();
 const key = new Uint8Array(32).fill(7);
-const scores = {
-  "erp:invoice.approve": { value: 0.94, policy: { id: "invoice-standard", version: "3.2" }, verified: true },
-  "erp:invoice.flag": { value: 0.9, policy: { id: "invoice-duplicate", version: "1.0" } },
-};
 const ctx = (usage: Record<string, { total?: string; count: number }> = {}): EvalContext => ({
-  scores,
+  verifications: { "erp:invoice.approve": true },
   contexts: [{ id: "ctx-1", rows: ["invoice.approve"] }],
   capUsage: (_r, c, g) => usage[`${c} ${g}`] ?? { total: "0", count: 0 },
 });
-const approve = (amount: string, vendor = "V-7"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: "INV-1", vendor_id: vendor, amount, currency: "EUR" } });
+const approve = (amount: string, vendor = "V-7"): Call => ({ tool: "mcp__erp__approve_invoice", arguments: { invoice_id: "INV-1", vendor_id: vendor, amount, currency: "EUR", po_number: "PO-1" } });
 
 function input(call: Call, c: EvalContext = ctx(), extra: Partial<RecordInput> = {}): RecordInput {
   return {
@@ -29,7 +25,6 @@ function input(call: Call, c: EvalContext = ctx(), extra: Partial<RecordInput> =
     call,
     decision: evaluate(policy, call, c),
     policy,
-    scores,
     factKey: key,
     ...extra,
   };
@@ -40,7 +35,7 @@ describe("building a record", () => {
   it("records the worked example and validates against the schema", () => {
     const r = buildRecord(input(approve("3200")));
     expect(checkRecord(r)).toEqual([]);
-    expect(r.format).toBe("vaom.decision/0.3");
+    expect(r.format).toBe("vaom.decision/0.4");
     expect(r.decision).toMatchObject({ outcome: "allow", band: "A" });
     expect(r.policy.matrix).toEqual({ id: "example.ap.invoice", version: "1.1.0" });
   });
@@ -67,15 +62,30 @@ describe("building a record", () => {
   });
 
   it("gives each batch item its own facts", () => {
-    const call: Call = { tool: "mcp__erp__approve_invoices", arguments: { invoices: [{ invoice_id: "A", vendor_id: "V-1", amount: "10" }, { invoice_id: "B", vendor_id: "V-2", amount: "20" }] } };
+    const call: Call = { tool: "mcp__erp__approve_invoices", arguments: { invoices: [{ invoice_id: "A", vendor_id: "V-1", amount: "10", po_number: "PO-A" }, { invoice_id: "B", vendor_id: "V-2", amount: "20", po_number: "PO-B" }] } };
     const r = buildRecord(input(call));
     expect(r.decision.placements.map((p) => p.facts.task)).toEqual([{ value: "A" }, { value: "B" }]);
     expect(checkRecord(r)).toEqual([]);
   });
 
-  it("records only the scores for capabilities the call touched", () => {
+  it("records each placement's score dimension by dimension, and the scoring policy behind it", () => {
     const r = buildRecord(input(approve("3200")));
-    expect(Object.keys(r.request.scores ?? {})).toEqual(["erp:invoice.approve"]);
+    expect(r.policy.scoring).toEqual([{ id: "invoice-standard", version: "3.2" }]);
+    expect(r.decision.placements[0]!.score).toEqual({ policy: { id: "invoice-standard", version: "3.2" }, value: 1, level: "high", verified: true, dimensions: { dataCompleteness: { score: 1 }, ruleMatch: { score: 1 } } });
+  });
+
+  it("names the checks and rules that failed, never the values they read", () => {
+    const call: Call = { tool: "mcp__erp__approve_invoice", arguments: { invoice_id: "INV-1", vendor_id: "V-7", amount: "3200", currency: "EUR", po_number: "" } };
+    const r = buildRecord(input(call));
+    expect(r.decision.placements[0]!.score?.dimensions.ruleMatch).toEqual({ score: 0, failed: ["po-referenced"] });
+    expect(JSON.stringify(r.decision.reasons)).not.toContain("V-7");
+    expect(checkRecord(r)).toEqual([]);
+  });
+
+  it("records the agent's stated certainty when there was one", () => {
+    const r = buildRecord(input({ ...approve("3200"), statedCertainty: 0.81 }));
+    expect(r.request.stated_certainty).toBe(0.81);
+    expect(checkRecord(r)).toEqual([]);
   });
 
   it("records the wire, context and model when given", () => {
@@ -112,7 +122,7 @@ describe("reasons never leak a private fact", () => {
   });
   it("ceiling and cap reasons lose their amounts when the amount is recorded as a digest", () => {
     const b = binding(); b.facts.amount.record = "digest";
-    const c = compilePolicy(matrix02(), b);
+    const c = compilePolicy(matrix02(), b, quietScoring());
     if (!c.ok) throw new Error("policy");
     const call = approve("7777");
     const r = buildRecord({ ...input(call), policy: c.policy, decision: evaluate(c.policy, call, ctx()) });

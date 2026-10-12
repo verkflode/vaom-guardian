@@ -2,6 +2,10 @@
   "format": "vaom-guardian.config/0.1",
   "matrix": "../../../schema/examples/incident.matrix.json",
   "binding": "../../../schema/examples/incident.binding.json",
+  "scoring": [
+    "../../../schema/examples/remediation-gate.scoring.json",
+    "../../../schema/examples/incident-detection.scoring.json"
+  ],
   "dataDir": "../../../.guardian/incident",
   "port": 47100,
   "approvalTimeoutSeconds": 300,

@@ -13,12 +13,14 @@
 import type { ContextRegistry } from "./authority/contexts.ts";
 import type { CapLedger } from "./caps/ledger.ts";
 import { evaluate } from "./eval/evaluate.ts";
-import type { Call, LiveContext, Policy, Score } from "./eval/types.ts";
+import type { Call, FactValue, LiveContext, Policy } from "./eval/types.ts";
 import { durationSeconds } from "./lint/duration.ts";
-import { buildRecord, recordedGroup, type DecisionRecord, type RecordInput } from "./record/record.ts";
+import { buildRecord, recordedGroup, recordFact, type DecisionRecord, type RecordedFact, type RecordInput } from "./record/record.ts";
+import type { History } from "./scoring/score.ts";
 
-export interface DecideInput extends Omit<RecordInput, "call" | "decision" | "policy" | "scores"> {
-  scores?: Record<string, Score>;
+export interface DecideInput extends Omit<RecordInput, "call" | "decision" | "policy"> {
+  /** An independent verifier's verdict per capability. See EvalContext.verifications. */
+  verifications?: Record<string, boolean>;
   /** The context registry; the session's live contexts at `ts` are the call's authority. None means no authority. */
   contexts?: ContextRegistry;
   /** Further live contexts, e.g. a lease's observation context (LeaseRegistry.observation). */
@@ -30,8 +32,25 @@ export function decide(policy: Policy, call: Call, ledger: CapLedger, input: Dec
   if (Number.isNaN(now)) throw new Error(`decide: ts ${JSON.stringify(input.ts)} is not a timestamp`);
 
   const live: LiveContext[] = [...(input.contexts ? input.contexts.liveFor(input.session.id, now) : []), ...(input.extraContexts ?? [])];
+  // History for anomaly signals is the ledger's, compared in the form records hold facts. A fact that
+  // can't be put in that form (a digest with no key) makes the history unreadable, so the signal fires.
+  const rec = (name: string, v: FactValue): RecordedFact | null => {
+    try { return recordFact(policy, name, v, input.factKey); } catch { return null; }
+  };
+  const recGroup = (g: Record<string, FactValue>): Record<string, RecordedFact> | null => {
+    const out: Record<string, RecordedFact> = {};
+    for (const [k, v] of Object.entries(g)) { const r = rec(k, v); if (!r) return null; out[k] = r; }
+    return out;
+  };
+  const history: History = {
+    seen: (row, fact, v, w) => { const r = rec(fact, v); return r ? ledger.historySeen(row, fact, r, now, w) : null; },
+    values: (row, fact, g, w) => { const r = recGroup(g); return r ? ledger.historyValues(row, fact, r, now, w) : null; },
+    count: (row, g, w) => { const r = recGroup(g); return r ? ledger.historyCount(row, r, now, w) : null; },
+  };
+
   const decision = evaluate(policy, call, {
-    ...(input.scores ? { scores: input.scores } : {}),
+    history,
+    ...(input.verifications ? { verifications: input.verifications } : {}),
     contexts: live,
     capUsage: (row, capId, rawGroup) => {
       const a = policy.rowById.get(row)?.authority;
@@ -45,11 +64,11 @@ export function decide(policy: Policy, call: Call, ledger: CapLedger, input: Dec
   // Record the context the call ran under: the first live one covering its first placement's row.
   const firstRow = decision.placements[0]?.row;
   const used = firstRow ? live.find((c) => c.rows.includes(firstRow) || (policy.rowById.get(firstRow)?.authority?.serves ?? []).some((s: string) => c.rows.includes(s))) : undefined;
-  const { contexts: _registry, extraContexts: _extra, ...recordInput } = input;
+  const { contexts: _registry, extraContexts: _extra, verifications: _verifications, ...recordInput } = input;
   const record = buildRecord({
     ...recordInput,
     ...(used && !input.context ? { context: { id: used.id, rows: [...used.rows] } } : {}),
-    call, decision, policy, ...(input.scores ? { scores: input.scores } : {}),
+    call, decision, policy,
   });
   ledger.reserve(record);
   return record;

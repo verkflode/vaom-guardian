@@ -12,7 +12,7 @@
 // toolCallResult, subagentStart, and a short list of purely observational steps, which are answered allow
 // with reason not_evaluated and chained. Anything else (wrapped protocols, memory and skill steps, AgBOM)
 // is METHOD_NOT_FOUND: a method this Guardian doesn't evaluate must not get an allow by default.
-import { decide, resolveRecord, type CapLedger, type ContextRegistry, type ContextSpec, type DecisionRecord, type LiveContext, type Policy, type Resolution, type Score } from "@verkflode/vaom-guardian-core";
+import { decide, resolveRecord, type CapLedger, type ContextRegistry, type ContextSpec, type DecisionRecord, type LiveContext, type Policy, type Resolution } from "@verkflode/vaom-guardian-core";
 import { Chain, requestHash, type ContextEntry } from "./chain.ts";
 import { AcsError, ERR } from "./errors.ts";
 import { validateRequestEnvelope, validateResponseEnvelope, validateSessionStart, validateSubagentStart, validateToolCallRequest, validateToolCallResult, type Validator } from "./generated/validators.js";
@@ -42,8 +42,6 @@ export interface EndpointConfig extends GuardianConfig {
   activationFor(input: { agentId: string; sessionId: string; payload: Json }): Omit<ContextSpec, "id" | "session" | "agent"> | null;
   /** Further live contexts for a session, e.g. lease observation contexts. */
   extraContexts?(sessionId: string, now: number): readonly LiveContext[];
-  /** Confidence scores for a call. Absent: no scores, so every delegable call routes low. */
-  scoresFor?(input: { sessionId: string; tool: string; payload: Json }): Record<string, Score>;
 }
 
 export interface EndpointDeps {
@@ -252,7 +250,6 @@ const STEPS: Record<string, Step> = {
         wire: { protocol: "acs", version: i.s.version, request_id: i.p.request_id, chain_hash: i.entry.entry_hash },
         contexts: deps.contexts,
         ...(cfg.extraContexts ? { extraContexts: cfg.extraContexts(i.sid, i.now) } : {}),
-        ...(cfg.scoresFor ? { scores: cfg.scoresFor({ sessionId: i.sid, tool: call.tool, payload: i.p.payload }) } : {}),
         ...(cfg.factKey ? { factKey: cfg.factKey } : {}),
       });
       i.out.records.push(record);

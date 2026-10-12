@@ -1,0 +1,588 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:decision:0.4",
+  "title": "VAOM decision record",
+  "description": "One Guardian decision, replayable: what was asked, under which matrix, binding and scoring policy versions, what was decided and why, and (once known) how it resolved. Tool arguments are never stored, only a digest of their canonical form; each fact appears in clear, as a keyed digest, or not at all, as the binding's record mode says. A record is written when the request is decided and gains a resolution later, so pending approvals still count against caps. Each placement carries its confidence score dimension by dimension, so the answer to \"why did this auto-execute?\" is specific scores against a specific policy version. Draft 0.4: replaces 0.3's supplied scores with computed ones.",
+  "type": "object",
+  "required": [
+    "format",
+    "id",
+    "request",
+    "policy",
+    "decision",
+    "reservations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "vaom.decision/0.4"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique per decision; assigned by the Guardian."
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "ts",
+        "agent",
+        "session",
+        "action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "agent": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string"
+            },
+            "model": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false,
+              "description": "The model behind the agent, so a decision can be traced to a model version.",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "session": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unattended": {
+              "type": "boolean"
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "required": [
+            "id",
+            "rows"
+          ],
+          "additionalProperties": false,
+          "description": "The delegated execution context (or lease) the call ran under.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "lease": {
+              "type": "string"
+            }
+          }
+        },
+        "action": {
+          "type": "object",
+          "required": [
+            "tool",
+            "params_digest"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "params_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "SHA-256 of the RFC 8785 (JCS) form of the unwrapped arguments."
+            },
+            "declared_capability": {
+              "type": "string"
+            }
+          }
+        },
+        "stated_certainty": {
+          "$ref": "#/$defs/probability",
+          "description": "The agent's own stated certainty, if the host passed one. It can lower a score, never raise it."
+        },
+        "wire": {
+          "type": "object",
+          "required": [
+            "protocol",
+            "version"
+          ],
+          "additionalProperties": false,
+          "description": "The protocol the call arrived on, e.g. ACS, with its correlation fields.",
+          "properties": {
+            "protocol": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "chain_hash": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": [
+        "matrix",
+        "binding"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "matrix": {
+          "$ref": "#/$defs/versioned"
+        },
+        "binding": {
+          "$ref": "#/$defs/versioned"
+        },
+        "scoring": {
+          "type": "array",
+          "description": "The scoring policies that scored this decision.",
+          "items": {
+            "$ref": "#/$defs/versioned"
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "band",
+        "placements",
+        "reasons"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "band": {
+          "$ref": "#/$defs/band"
+        },
+        "approver_role": {
+          "type": "string"
+        },
+        "placements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "row",
+              "capability",
+              "entry",
+              "band",
+              "outcome",
+              "facts"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "row": {
+                "type": "string"
+              },
+              "capability": {
+                "type": "string"
+              },
+              "entry": {
+                "type": "string"
+              },
+              "band": {
+                "$ref": "#/$defs/band"
+              },
+              "outcome": {
+                "$ref": "#/$defs/outcome"
+              },
+              "approver_role": {
+                "type": "string"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/recordedFact"
+                }
+              },
+              "score": {
+                "$ref": "#/$defs/score"
+              }
+            }
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        }
+      }
+    },
+    "reservations": {
+      "type": "array",
+      "description": "Cap uses this decision holds. 'group' is a keyed digest whenever a grouped fact isn't recorded in clear.",
+      "items": {
+        "type": "object",
+        "required": [
+          "cap",
+          "row",
+          "group",
+          "count"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "cap": {
+            "type": "string"
+          },
+          "row": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)(\\.\\d+)?$"
+          },
+          "count": {
+            "const": 1
+          }
+        }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "ts",
+        "result"
+      ],
+      "additionalProperties": false,
+      "description": "How the decision ended. Absent while an approval is pending.",
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "result": {
+          "enum": [
+            "executed",
+            "rejected",
+            "expired",
+            "withdrawn",
+            "not-executed"
+          ],
+          "description": "executed: the action ran. rejected: the approver said no. expired: no approval in time. withdrawn: the agent abandoned it. not-executed: refused or unplaceable, so it never ran."
+        },
+        "approval": {
+          "type": "object",
+          "required": [
+            "approver_role",
+            "record"
+          ],
+          "additionalProperties": false,
+          "description": "The human approval record this rests on; required when a review or escalation was executed.",
+          "properties": {
+            "approver_role": {
+              "type": "string"
+            },
+            "approver_id": {
+              "type": "string",
+              "description": "Only when the deployment records approvers individually, which is employee monitoring and off by default."
+            },
+            "record": {
+              "type": "string",
+              "description": "Reference to the approval record."
+            },
+            "latency_ms": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "A refused or unplaceable decision never executed.",
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "refuse",
+                  "unplaceable"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resolution": {
+            "properties": {
+              "result": {
+                "const": "not-executed"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "A review or escalation that executed rests on an approval record.",
+      "if": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "review",
+                  "escalate"
+                ]
+              }
+            }
+          },
+          "resolution": {
+            "properties": {
+              "result": {
+                "const": "executed"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "resolution"
+        ]
+      },
+      "then": {
+        "properties": {
+          "resolution": {
+            "required": [
+              "approval"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "versioned": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "outcome": {
+      "enum": [
+        "allow",
+        "review",
+        "escalate",
+        "refuse",
+        "unplaceable"
+      ]
+    },
+    "band": {
+      "enum": [
+        "A",
+        "B",
+        "C",
+        "non-delegable",
+        null
+      ]
+    },
+    "reason": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        }
+      }
+    },
+    "recordedFact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "value": {}
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "digest"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "type": "string",
+              "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "omitted"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "omitted": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "level": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "score": {
+      "type": "object",
+      "required": [
+        "policy",
+        "value",
+        "level",
+        "dimensions"
+      ],
+      "additionalProperties": false,
+      "description": "The placement's composite confidence score as its row's scoring policy computed it. Rule, check and signal ids are recorded, never the values they read.",
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/versioned"
+        },
+        "value": {
+          "$ref": "#/$defs/probability",
+          "description": "The composite after any stated-certainty cap."
+        },
+        "level": {
+          "$ref": "#/$defs/level",
+          "description": "The level the row's thresholds gave, after the policy's caps."
+        },
+        "cap": {
+          "enum": [
+            "medium",
+            "low"
+          ],
+          "description": "The strictest level a gate, floor, hard rule or stated certainty allowed."
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "An independent verifier passed. Absent: no verification was supplied."
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dataCompleteness": {
+              "$ref": "#/$defs/dimensionScore"
+            },
+            "ruleMatch": {
+              "$ref": "#/$defs/dimensionScore"
+            },
+            "anomaly": {
+              "$ref": "#/$defs/dimensionScore"
+            }
+          }
+        }
+      }
+    },
+    "dimensionScore": {
+      "type": "object",
+      "required": [
+        "score"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "$ref": "#/$defs/probability"
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Checks or rules that did not hold."
+        },
+        "fired": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Anomaly signals that fired."
+        }
+      }
+    }
+  }
+}

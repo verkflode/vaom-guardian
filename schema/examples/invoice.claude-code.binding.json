@@ -2,7 +2,7 @@
   "$schema": "../vaom-binding.schema.json",
   "format": "vaom.binding/0.1",
   "id": "example.ap.invoice.claude-code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "Invoice matrix on Claude Code, via a placeholder ERP MCP server",
   "host": { "id": "claude-code", "toolSet": "claude-code-2026.09 + placeholder erp MCP server 1.x" },
   "matrix": { "id": "example.ap.invoice", "versions": ">=1.0.0 <2.0.0" },
@@ -10,7 +10,8 @@
   "facts": {
     "amount": { "type": "money", "description": "Invoice amount as it will be approved." },
     "counterparty": { "type": "string", "description": "Vendor id.", "record": "digest" },
-    "task": { "type": "string", "description": "Invoice id: the task the execution context is bound to.", "record": "value" }
+    "task": { "type": "string", "description": "Invoice id: the task the execution context is bound to.", "record": "value" },
+    "po_reference": { "type": "string", "description": "The purchase order the approval cites.", "record": "value" }
   },
 
   "tools": [
@@ -21,7 +22,8 @@
       "facts": {
         "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
         "counterparty": { "arg": "/vendor_id" },
-        "task": { "arg": "/invoice_id" }
+        "task": { "arg": "/invoice_id" },
+        "po_reference": { "arg": "/po_number" }
       }
     },
     {
@@ -35,7 +37,8 @@
         "facts": {
           "amount": { "amount": { "arg": "/amount" }, "currency": { "const": "EUR" } },
           "counterparty": { "arg": "/vendor_id" },
-          "task": { "arg": "/invoice_id" }
+          "task": { "arg": "/invoice_id" },
+          "po_reference": { "arg": "/po_number" }
         }
       }
     },

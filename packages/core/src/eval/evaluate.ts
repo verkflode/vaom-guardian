@@ -10,32 +10,74 @@
 // - Authority exists only inside a live execution context covering the call's row (and its task, if bound);
 //   a context's band ceiling narrows further.
 import { lintBinding } from "../lint/binding.ts";
+import { lintScoring, scoringFacts } from "../lint/scoring.ts";
+import type { Finding } from "../lint/types.ts";
+import { capLevel, score as computeScore, type Level } from "../scoring/score.ts";
 import { evalCondition } from "./conditions.ts";
 import { addDecimal, cmpDecimal } from "./decimal.ts";
 import { extractFact } from "./facts.ts";
 import { resolvePointer } from "./pointer.ts";
-import type { Band, Call, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, Policy, Reason, Reservation } from "./types.ts";
+import type { Band, Call, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, PlacementScore, Policy, Reason, Reservation } from "./types.ts";
 
 type Validated = any;
 
-/** Compile a policy. Refuses unless the binding, checked against the matrix, lints clean. */
-export function compilePolicy(matrix: unknown, binding: unknown): CompileResult {
+/**
+ * Compile a policy. Refuses unless the binding, checked against the matrix, lints clean, and every scoring
+ * policy a row cites is given, lints clean against the binding, and reads only facts that row's binding
+ * entries extract. (A policy reading a fact the entry never extracts would fail that check on every call:
+ * a silent Review Queue Flood rather than a visible configuration error.)
+ */
+export function compilePolicy(matrix: unknown, binding: unknown, scoring: readonly unknown[] = []): CompileResult {
   const lint = lintBinding(binding, matrix);
   if (!lint.ok) return { ok: false, findings: lint.findings };
-  const m = matrix as Validated;
+  const m = matrix as Validated, b = binding as Validated;
   const rowById = new Map<string, Validated>(), rowByCapability = new Map<string, Validated>();
   for (const row of m.rows) {
     rowById.set(row.id, row);
     for (const cap of row.capabilities) rowByCapability.set(cap, row);
   }
-  return { ok: true, policy: { matrix: m, binding: binding as Validated, rowById, rowByCapability } };
+
+  // Only the policies rows cite are compiled; others given alongside (for another matrix, say) are ignored.
+  const findings: Finding[] = [];
+  const given = new Map<string, { s: Validated; i: number }>();
+  scoring.forEach((s, i) => {
+    const key = `${(s as Validated)?.id}@${(s as Validated)?.version}`;
+    if (given.has(key)) findings.push({ rule: "scoring.duplicate", severity: "error", path: `/scoring/${i}`, message: `scoring policy ${key} is given more than once` });
+    else given.set(key, { s, i });
+  });
+  const policies = new Map<string, Validated>();
+  (m.rows as Validated[]).forEach((row, i) => {
+    const sp = row.authority?.confidence?.scoringPolicy;
+    if (!sp) return;
+    const key = `${sp.id}@${sp.version}`;
+    const g = given.get(key);
+    if (!g) {
+      findings.push({ rule: "scoring.missing", severity: "error", path: `/rows/${i}/authority/confidence/scoringPolicy`, message: `row ${row.id} cites scoring policy ${key}, which wasn't given` });
+      return;
+    }
+    if (!policies.has(key)) {
+      const r = lintScoring(g.s, binding);
+      findings.push(...r.findings.filter((f) => f.severity === "error").map((f) => ({ ...f, path: `/scoring/${g.i}${f.path}` })));
+      if (!r.ok) return;
+      policies.set(key, g.s);
+    }
+    const read = [...new Set(scoringFacts(g.s).map((x) => x.fact))];
+    for (const t of b.tools as Validated[]) {
+      if (!(row.capabilities as string[]).includes(t.capability)) continue;
+      const extracted = new Set([...Object.keys(t.facts ?? {}), ...Object.keys(t.items?.facts ?? {})]);
+      const missing = read.filter((f) => !extracted.has(f));
+      if (missing.length) findings.push({ rule: "scoring.fact-not-extracted", severity: "error", path: `/rows/${i}`, message: `scoring policy ${key} reads ${missing.join(", ")}, which binding entry ${t.id} doesn't extract` });
+    }
+  });
+  if (findings.length) return { ok: false, findings };
+  return { ok: true, policy: { matrix: m, binding: b, rowById, rowByCapability, scoring: policies } };
 }
 
 const RANK: Record<Band, number> = { A: 0, B: 1, C: 2, "non-delegable": 3 };
 const stricter = (a: Band, b: Band): Band => (RANK[b] > RANK[a] ? b : a);
 
 export function evaluate(policy: Policy, call: Call, ctx: EvalContext): Decision {
-  const policyRef = {
+  const policyRef: Decision["policy"] = {
     matrix: { id: policy.matrix.id, version: policy.matrix.version },
     binding: { id: policy.binding.id, version: policy.binding.version },
   };
@@ -67,6 +109,8 @@ export function evaluate(policy: Policy, call: Call, ctx: EvalContext): Decision
   const reasons = placements.flatMap((p) => p.reasons);
   const reservations = placements.flatMap((p) => (p as Placement & { _res?: Reservation[] })._res ?? []);
   for (const p of placements) delete (p as Placement & { _res?: Reservation[] })._res;
+  const scoredBy = new Map(placements.flatMap((p) => (p.score ? [[`${p.score.policy.id}@${p.score.policy.version}`, p.score.policy] as const] : [])));
+  if (scoredBy.size) policyRef.scoring = [...scoredBy.values()];
 
   // A refusal is definite and wins; then anything unplaceable; then the strictest band.
   if (placements.some((p) => p.outcome === "refuse")) return { outcome: "refuse", band: "non-delegable", placements, reasons, reservations: [], policy: policyRef };
@@ -171,18 +215,27 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   if (applicable.length === 0) return fail("context.task-mismatch", `the call's task isn't the one its context is bound to`);
 
   // Confidence picks among the bands the matrix authorises; everything after can only narrow.
-  const score = ctx.scores?.[entry.capability];
-  const sp = a.confidence?.scoringPolicy;
-  let level: "high" | "medium" | "low" = "low";
+  // The score comes only from the row's own scoring policy, computed here from the placement's facts.
+  let level: Level = "low";
+  let scored: PlacementScore | undefined;
+  const verified = ctx.verifications?.[entry.capability];
   if (!a.confidence) reasons.push({ code: "confidence.no-policy", row: row.id });
-  else if (!score) reasons.push({ code: "confidence.no-score", row: row.id });
-  else if (score.policy.id !== sp.id || score.policy.version !== sp.version) reasons.push({ code: "confidence.wrong-policy", detail: `score from ${score.policy.id}@${score.policy.version}, row uses ${sp.id}@${sp.version}`, row: row.id });
-  else if (!Number.isFinite(score.value)) reasons.push({ code: "confidence.invalid", row: row.id });
-  else level = score.value >= a.confidence.thresholds.high ? "high" : score.value >= a.confidence.thresholds.medium ? "medium" : "low";
+  else {
+    const sp = a.confidence.scoringPolicy;
+    const sPolicy = policy.scoring.get(`${sp.id}@${sp.version}`);
+    if (!sPolicy) reasons.push({ code: "confidence.no-score", detail: `scoring policy ${sp.id}@${sp.version} isn't loaded`, row: row.id });
+    else {
+      const s = computeScore(sPolicy, { row: row.id, facts, ...(ctx.history ? { history: ctx.history } : {}), ...(call.statedCertainty !== undefined ? { statedCertainty: call.statedCertainty } : {}) });
+      reasons.push(...s.reasons);
+      const t = a.confidence.thresholds;
+      level = capLevel(s.value >= t.high ? "high" : s.value >= t.medium ? "medium" : "low", s.cap);
+      scored = { policy: s.policy, value: s.value, level, ...(s.cap ? { cap: s.cap } : {}), ...(verified !== undefined ? { verified } : {}), dimensions: s.dimensions };
+    }
+  }
   let band: Band = a.routing[level];
   reasons.push({ code: `confidence.${level}`, row: row.id });
 
-  if (band === "A" && a.confidence?.verificationRequired && score?.verified !== true) {
+  if (band === "A" && a.confidence?.verificationRequired && verified !== true) {
     band = "B";
     reasons.push({ code: "verification.missing", detail: "Band A on this row requires a passing independent verification", row: row.id });
   }
@@ -209,10 +262,11 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
     if (ceiling && RANK[ceiling] > RANK[band]) { band = ceiling; reasons.push({ code: "context.ceiling", detail: `context ${c.id} caps this row at ${ceiling}`, row: row.id }); }
   }
 
-  if (band === "non-delegable") return { ...base, band, outcome: "refuse", facts, reasons };
+  const withScore = scored ? { score: scored } : {};
+  if (band === "non-delegable") return { ...base, band, outcome: "refuse", facts, ...withScore, reasons };
   const outcome: Outcome = band === "A" ? "allow" : band === "B" ? "review" : "escalate";
   const approverRole = band === "B" ? a.reviewer : band === "C" ? a.escalation.role : undefined;
-  return withReservations({ ...base, band, outcome, ...(approverRole ? { approverRole } : {}), facts, reasons }, reservations);
+  return withReservations({ ...base, band, outcome, ...(approverRole ? { approverRole } : {}), facts, ...withScore, reasons }, reservations);
 }
 
 /** A context without explicit scopes covers everything its rows reach; with scopes, only those. */

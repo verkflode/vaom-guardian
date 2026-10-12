@@ -1,0 +1,51 @@
+{
+  "$schema": "../vaom-scoring-0.1.schema.json",
+  "format": "vaom.scoring/0.1",
+  "id": "aml-dismissal",
+  "version": "2.0",
+  "title": "Low-risk AML alert dismissal",
+  "decisionType": "dismissal of alerts outside the typologies",
+  "approval": {
+    "role": "mlro",
+    "date": "2026-09-20",
+    "ref": "placeholder: AML scoring policy sign-off"
+  },
+  "description": "VAOM v5 Section 7B. An alert may be dismissed in Band A only when it matches a known false-positive pattern (own-account transfer, salary, utility). Any other pattern, a structuring typology above all, fails a hard rule and is capped at review, whatever else scores well. PEP, sanctions and the reporting threshold are not here: they are the matrix row's non-delegable overrides, which apply regardless of score.",
+  "dimensions": {
+    "dataCompleteness": {
+      "weight": 0.7,
+      "floor": "must-pass",
+      "checks": [
+        {
+          "id": "alert-complete",
+          "present": [
+            "task",
+            "amount",
+            "pattern",
+            "pep",
+            "sanctioned"
+          ]
+        }
+      ]
+    },
+    "ruleMatch": {
+      "weight": 0.3,
+      "floor": 1,
+      "rules": [
+        {
+          "id": "known-false-positive",
+          "when": {
+            "fact": "pattern",
+            "op": "in",
+            "value": [
+              "own-account-transfer",
+              "salary",
+              "utility"
+            ]
+          },
+          "hard": true
+        }
+      ]
+    }
+  }
+}

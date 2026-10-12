@@ -10,8 +10,13 @@ import { validateResponseEnvelope } from "../src/generated/validators.js";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
 const load = (f: string): any => JSON.parse(readFileSync(join(examples, f), "utf8"));
-function policy(): Policy {
-  const r = compilePolicy(load("incident.matrix.json"), load("incident.binding.json"));
+const scoring = ["remediation-gate", "incident-detection"].map((s) => load(`${s}.scoring.json`));
+// The Guardian has no verifier channel, so a restart under the 7D matrix (verification required) never
+// reaches Band A. `unverified` drops that requirement, to test the allow path through the wire.
+function policy(unverified = false): Policy {
+  const m = load("incident.matrix.json");
+  if (unverified) for (const row of m.rows) if (row.authority.confidence) delete row.authority.confidence.verificationRequired;
+  const r = compilePolicy(m, load("incident.binding.json"), scoring);
   if (!r.ok) throw new Error(JSON.stringify(r.findings));
   return r.policy;
 }
@@ -25,8 +30,8 @@ const AGENT = "incident-agent";
 let n = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
 
-function setup(over: Partial<EndpointConfig> = {}) {
-  const p = policy();
+function setup(over: Partial<EndpointConfig> = {}, unverified = false) {
+  const p = policy(unverified);
   const ledger = new CapLedger();
   ledger.load([]);
   const contexts = new ContextRegistry(p);
@@ -75,8 +80,8 @@ const hello = { acs_versions_supported: ["0.1.0"], methods_implemented: ["steps/
 const tool = (name: string, args: Record<string, unknown>) => ({ tool: { name }, arguments: Object.fromEntries(Object.entries(args).map(([k, v]) => [k, { value: v }])) });
 const restart = (incident: string, stateless = true) => tool("mcp__deploy__rolling_restart", { incident_id: incident, service: "web", stateless });
 
-function started(over: Partial<EndpointConfig> = {}) {
-  const s = setup(over);
+function started(over: Partial<EndpointConfig> = {}, unverified = false) {
+  const s = setup(over, unverified);
   expect(send(s, "handshake/hello", hello).result.negotiated_version).toBe("0.1.0");
   expect(send(s, "steps/sessionStart", { intent: { raw: "INC-7" } }).result.decision).toBe("allow");
   return s;
@@ -154,16 +159,21 @@ describe("transport checks fail closed", () => {
 });
 
 describe("tool calls through the matrix (7D)", () => {
-  it("routes a restart inside the incident's context: no scorer means low confidence, Band C, escalation", () => {
+  it("routes a restart inside the incident's context: high confidence but no verifier, so Band B, review", () => {
     const s = started();
     const r = send(s, "steps/toolCallRequest", restart("INC-7"));
-    expect(r.result).toMatchObject({ decision: "ask", ask_details: { approver: { type: "human", id: "head-of-engineering" }, timeout_disposition: "deny" } });
+    expect(r.result).toMatchObject({ decision: "ask", ask_details: { approver: { type: "human", id: "sre-lead" }, timeout_disposition: "deny" } });
+    expect(r.records[0]!.decision.placements[0]!.score).toMatchObject({ policy: { id: "remediation-gate", version: "4.1" }, level: "high" });
+    expect(r.records[0]!.decision.reasons.map((x) => x.code)).toContain("verification.missing");
     expect(r.records).toHaveLength(1);
     expect(r.records[0]!.request.wire).toMatchObject({ protocol: "acs", request_id: r.env.params.request_id, chain_hash: r.result.chain_hash });
   });
-  it("with a verified high score, Band A: allow", () => {
-    const s = started({ scoresFor: () => ({ "deploy:service.rolling-restart": { value: 0.93, policy: { id: "remediation-gate", version: "4.1" }, verified: true } }) });
-    expect(send(s, "steps/toolCallRequest", restart("INC-7")).result.decision).toBe("allow");
+  it("a stateful service fails a hard rule and a restriction: Band C, escalation", () => {
+    const r = send(started(), "steps/toolCallRequest", restart("INC-7", false));
+    expect(r.result).toMatchObject({ decision: "ask", ask_details: { approver: { type: "human", id: "head-of-engineering" } } });
+  });
+  it("where the row needs no verification, a high score is Band A: allow", () => {
+    expect(send(started({}, true), "steps/toolCallRequest", restart("INC-7")).result.decision).toBe("allow");
   });
   it("defers a restart for another incident (task mismatch) with timeout deny", () => {
     const r = send(started(), "steps/toolCallRequest", restart("INC-8"));
@@ -189,9 +199,8 @@ describe("tool calls through the matrix (7D)", () => {
 });
 
 describe("results resolve decisions", () => {
-  const high = { scoresFor: () => ({ "deploy:service.rolling-restart": { value: 0.93, policy: { id: "remediation-gate", version: "4.1" }, verified: true } }) };
   it("an allowed call that ran resolves as executed and keeps its cap use", () => {
-    const s = started(high);
+    const s = started({}, true);
     const req = send(s, "steps/toolCallRequest", restart("INC-7"));
     const res = send(s, "steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: req.env.params.request_id, exit_status: "success", outputs: [] });
     expect(res.result.decision).toBe("allow");
@@ -207,8 +216,8 @@ describe("results resolve decisions", () => {
   it("an ask that executed after the named approver approved resolves as executed", () => {
     const s = started();
     const req = send(s, "steps/toolCallRequest", restart("INC-7"));
-    expect(() => s.ep.approve(S1, req.env.params.request_id, { approver_role: "sre-lead", record: "apr-0" })).toThrow(/names head-of-engineering/);
-    s.ep.approve(S1, req.env.params.request_id, { approver_role: "head-of-engineering", record: "apr-1" });
+    expect(() => s.ep.approve(S1, req.env.params.request_id, { approver_role: "head-of-engineering", record: "apr-0" })).toThrow(/names sre-lead/);
+    s.ep.approve(S1, req.env.params.request_id, { approver_role: "sre-lead", record: "apr-1" });
     const res = send(s, "steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: req.env.params.request_id, exit_status: "success", outputs: [] });
     expect(res.records[0]?.resolution).toMatchObject({ result: "executed", approval: { record: "apr-1" } });
   });
@@ -224,7 +233,7 @@ describe("results resolve decisions", () => {
     expect(s.ep.close(S1, req.env.params.request_id, "rejected", "2026-10-05T10:01:00Z").resolution?.result).toBe("rejected");
   });
   it("a response that would fail the ACS schema goes out as an error, and the decision behind it is undone", () => {
-    const s = started({ approvalTimeoutSeconds: 1.5, ...high });
+    const s = started({ approvalTimeoutSeconds: 1.5 }, true);
     const release = vi.spyOn(s.ledger, "release");
     const req = send(s, "steps/toolCallRequest", restart("INC-7"), {});
     expect(req.result.decision).toBe("allow"); // allow carries no ask_details, so it's valid
@@ -239,7 +248,7 @@ describe("results resolve decisions", () => {
     expect(res.incidents[0]?.kind).toBe("unlinked-result");
   });
   it("persistFailed turns the response into an error and releases the reservation", () => {
-    const s = started(high);
+    const s = started({}, true);
     const req = send(s, "steps/toolCallRequest", restart("INC-7"));
     const out = s.ep.persistFailed(req, S1);
     expect(out.error.code).toBe(ERR.INTERNAL);

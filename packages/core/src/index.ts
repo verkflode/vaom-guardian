@@ -2,16 +2,18 @@
 // It runs unchanged in Node and in the browser (the Delegation Lab).
 export { lintMatrix, MATRIX_FORMATS } from "./lint/matrix.ts";
 export { lintBinding, BINDING_FORMAT } from "./lint/binding.ts";
+export { lintScoring, SCORING_FORMAT } from "./lint/scoring.ts";
+export { score, capLevel, type DimensionScore, type History, type Level, type ScoreInput, type ScoreResult } from "./scoring/score.ts";
 export type { Finding, LintResult, Severity } from "./lint/types.ts";
 export { compilePolicy, evaluate } from "./eval/evaluate.ts";
-export type { Band, Call, CapUsage, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, Policy, Reason, Reservation, Score } from "./eval/types.ts";
+export type { Band, Call, CapUsage, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, PlacementScore, Policy, Reason, Reservation } from "./eval/types.ts";
 export { buildRecord, checkRecord, resolveRecord, RecordError, RECORD_FORMAT } from "./record/record.ts";
 export type { DecisionRecord, RecordedFact, RecordInput, Resolution } from "./record/record.ts";
 export { canonicalize } from "./canonical/jcs.ts";
 export { sha256, hmacSha256, hex, utf8 } from "./crypto/sha256.ts";
 export { CapLedger } from "./caps/ledger.ts";
 export { decide, type DecideInput } from "./decide.ts";
-export { recordedGroup } from "./record/record.ts";
+export { recordedGroup, recordFact } from "./record/record.ts";
 export { ContextRegistry, DEFAULT_CONTEXT_LIFETIME, type Context, type ContextSpec, type DeriveResult } from "./authority/contexts.ts";
 export { LeaseRegistry, type Health, type Lease } from "./authority/leases.ts";
 export type { LiveContext } from "./eval/types.ts";

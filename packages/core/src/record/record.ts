@@ -1,4 +1,5 @@
-// Decision records, format vaom.decision/0.3: one decision, replayable.
+// Decision records, format vaom.decision/0.4: one decision, replayable. (0.3 records, with supplied
+// scores, still validate for reading old evidence; nothing writes them any more.)
 //
 // Privacy by construction:
 // - Tool arguments are never stored: only the SHA-256 of their JCS form.
@@ -10,12 +11,12 @@
 // (deny): no evidence, no action.
 import { canonicalize } from "../canonical/jcs.ts";
 import { hex, hmacSha256, sha256, utf8 } from "../crypto/sha256.ts";
-import type { Call, Decision, FactValue, Policy, Reason, Score } from "../eval/types.ts";
-import { validateDecision03 } from "../generated/validators.js";
+import type { Call, Decision, FactValue, PlacementScore, Policy, Reason } from "../eval/types.ts";
+import { validateDecision03, validateDecision04 } from "../generated/validators.js";
 import { schemaFindings } from "../lint/schema-findings.ts";
 import type { Finding } from "../lint/types.ts";
 
-export const RECORD_FORMAT = "vaom.decision/0.3";
+export const RECORD_FORMAT = "vaom.decision/0.4";
 
 export class RecordError extends Error {
   override name = "RecordError";
@@ -32,7 +33,7 @@ export interface DecisionRecord {
     session: { id: string; unattended?: boolean };
     context?: { id: string; rows: string[]; lease?: string };
     action: { tool: string; params_digest: string; declared_capability?: string };
-    scores?: Record<string, { value: number; policy: { id: string; version: string }; verified?: boolean }>;
+    stated_certainty?: number;
     wire?: { protocol: string; version: string; request_id?: string; chain_hash?: string };
   };
   policy: Decision["policy"];
@@ -40,7 +41,7 @@ export interface DecisionRecord {
     outcome: Decision["outcome"];
     band: Decision["band"];
     approver_role?: string;
-    placements: { row: string; capability: string; entry: string; band: Decision["band"]; outcome: Decision["outcome"]; approver_role?: string; facts: Record<string, RecordedFact> }[];
+    placements: { row: string; capability: string; entry: string; band: Decision["band"]; outcome: Decision["outcome"]; approver_role?: string; facts: Record<string, RecordedFact>; score?: PlacementScore }[];
     reasons: Reason[];
   };
   reservations: { cap: string; row: string; group: string; amount?: string; count: 1 }[];
@@ -63,20 +64,13 @@ export interface RecordInput {
   call: Call;
   decision: Decision;
   policy: Policy;
-  /** The scores the evaluation was given; only those for capabilities the call touched are recorded. */
-  scores?: Record<string, Score>;
   /** HMAC key for digest-mode facts and private cap groups. Held outside the agent's reach; never stored. */
   factKey?: Uint8Array;
 }
 
 export function buildRecord(input: RecordInput): DecisionRecord {
   const { call, decision, policy } = input;
-  const factDefs = policy.binding.facts as Record<string, { record?: "value" | "digest" | "omit" }>;
-  const mode = (name: string) => factDefs[name]?.record ?? "value";
-  const digest = (data: string): string => {
-    if (!input.factKey || input.factKey.length === 0) throw new RecordError("a fact or cap group must be recorded as a digest, but no fact key was given");
-    return `hmac-sha256:${hex(hmacSha256(input.factKey, utf8(data)))}`;
-  };
+  const mode = (name: string) => factMode(policy, name);
 
   let paramsJcs: string;
   try {
@@ -87,11 +81,8 @@ export function buildRecord(input: RecordInput): DecisionRecord {
 
   const placements = decision.placements.map((p) => {
     const facts: Record<string, RecordedFact> = {};
-    for (const [name, value] of Object.entries(p.facts)) {
-      const m = mode(name);
-      facts[name] = m === "value" ? { value } : m === "omit" ? { omitted: true } : { digest: digest(canonicalize(value)) };
-    }
-    return { row: p.row, capability: p.capability, entry: p.entry, band: p.band, outcome: p.outcome, ...(p.approverRole ? { approver_role: p.approverRole } : {}), facts };
+    for (const [name, value] of Object.entries(p.facts)) facts[name] = recordFact(policy, name, value, input.factKey);
+    return { row: p.row, capability: p.capability, entry: p.entry, band: p.band, outcome: p.outcome, ...(p.approverRole ? { approver_role: p.approverRole } : {}), facts, ...(p.score ? { score: p.score } : {}) };
   });
 
   // Which rows' amounts may be quoted: only where every money fact behind a ceiling or value cap is in clear.
@@ -113,13 +104,6 @@ export function buildRecord(input: RecordInput): DecisionRecord {
     count: 1 as const,
   }));
 
-  const touched = new Set(decision.placements.map((p) => p.capability));
-  const scores = Object.fromEntries(
-    Object.entries(input.scores ?? {})
-      .filter(([cap]) => touched.has(cap))
-      .map(([cap, s]) => [cap, { value: s.value, policy: s.policy, ...(s.verified !== undefined ? { verified: s.verified } : {}) }]),
-  );
-
   const record: DecisionRecord = {
     format: RECORD_FORMAT,
     id: input.id,
@@ -129,7 +113,7 @@ export function buildRecord(input: RecordInput): DecisionRecord {
       session: input.session,
       ...(input.context ? { context: input.context } : {}),
       action: { tool: call.tool, params_digest: `sha256:${hex(sha256(utf8(paramsJcs)))}`, ...(call.declaredCapability ? { declared_capability: call.declaredCapability } : {}) },
-      ...(Object.keys(scores).length ? { scores } : {}),
+      ...(call.statedCertainty !== undefined ? { stated_certainty: call.statedCertainty } : {}),
       ...(input.wire ? { wire: input.wire } : {}),
     },
     policy: decision.policy,
@@ -139,6 +123,19 @@ export function buildRecord(input: RecordInput): DecisionRecord {
   const problems = checkRecord(record);
   if (problems.length) throw new RecordError(`built record fails its schema: ${problems.map((f) => `${f.path} ${f.message}`).join("; ")}`);
   return record;
+}
+
+function factMode(policy: Policy, name: string): "value" | "digest" | "omit" {
+  return (policy.binding.facts as Record<string, { record?: "value" | "digest" | "omit" }>)[name]?.record ?? "value";
+}
+
+/** A fact in the form records hold it, as the binding's record mode says. History compares in this form. */
+export function recordFact(policy: Policy, name: string, value: FactValue, factKey: Uint8Array | undefined): RecordedFact {
+  const m = factMode(policy, name);
+  if (m === "value") return { value };
+  if (m === "omit") return { omitted: true };
+  if (!factKey || factKey.length === 0) throw new RecordError("a fact must be recorded as a digest, but no fact key was given");
+  return { digest: `hmac-sha256:${hex(hmacSha256(factKey, utf8(canonicalize(value))))}` };
 }
 
 /**
@@ -173,7 +170,8 @@ export function resolveRecord(record: DecisionRecord, resolution: Resolution): D
   return resolved;
 }
 
-/** Validate a record against the vaom.decision/0.3 schema. Empty means valid. */
+/** Validate a record against its format's schema (vaom.decision/0.4, or 0.3 for older evidence). Empty means valid. */
 export function checkRecord(record: unknown): Finding[] {
-  return validateDecision03(record) ? [] : schemaFindings(validateDecision03.errors);
+  const v = (record as { format?: unknown } | null)?.format === "vaom.decision/0.3" ? validateDecision03 : validateDecision04;
+  return v(record) ? [] : schemaFindings(v.errors);
 }

@@ -22,3 +22,25 @@ export const errors = (r: LintResult) => r.findings.filter((f) => f.severity ===
 export const warnings = (r: LintResult) => r.findings.filter((f) => f.severity === "warning");
 export const rules = (r: LintResult, severity: "error" | "warning" = "error") =>
   [...new Set(r.findings.filter((f) => f.severity === severity).map((f) => f.rule))].sort();
+
+const scoringFiles = ["invoice-standard", "invoice-duplicate", "aml-dismissal", "remediation-gate", "incident-detection", "reorder-gate", "price-anomaly"];
+const scoringText = Object.fromEntries(scoringFiles.map((f) => [f, read(`${f}.scoring.json`)]));
+/** Every example scoring policy, fresh. */
+export const scoringPolicies = (): Doc[] => scoringFiles.map((f) => JSON.parse(scoringText[f]!));
+export const scoringPolicy = (id: string): Doc => JSON.parse(scoringText[id]!);
+
+/**
+ * A policy with its anomaly dimension removed and the other weights scaled up to sum to 1 again: for tests
+ * about something other than history, so a fresh ledger's unfamiliar vendors don't decide the band.
+ */
+export function withoutAnomaly(s: Doc): Doc {
+  const d = s.dimensions;
+  if (!d.anomaly) return s;
+  delete d.anomaly;
+  const rest = Object.values(d) as { weight: number }[];
+  const sum = rest.reduce((a, x) => a + x.weight, 0);
+  if (sum === 0) rest[0]!.weight = 1;
+  else for (const x of rest) x.weight = x.weight / sum;
+  return s;
+}
+export const quietScoring = (): Doc[] => scoringPolicies().map(withoutAnomaly);
