@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:probes:0.1",
+  "title": "VAOM boundary probes",
+  "description": "How each boundary a matrix relies on is probed on one agent host (VAOM v5 Section 9, scorecard metric 13): the forbidden action attempted from inside the agent's context, against a canary, never a live counterparty. Human-approved and versioned. A probe runner executes these on the host and writes vaom.probe-result records; the Guardian keeps the results and judges each boundary against the matrix's claimed mechanism and schedule. Engine-agnostic about how the attempt is made; the host id names which runner applies. Draft 0.1.",
+  "type": "object",
+  "required": [
+    "format",
+    "id",
+    "version",
+    "title",
+    "approval",
+    "host",
+    "probes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "format": {
+      "const": "vaom.probes/0.1"
+    },
+    "id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "date"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/identifier"
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "toolSet": {
+          "type": "string"
+        }
+      }
+    },
+    "probes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "boundary",
+          "forbiddenTools",
+          "attempt"
+        ],
+        "properties": {
+          "boundary": {
+            "$ref": "#/$defs/identifier",
+            "description": "A boundary id in the matrix."
+          },
+          "forbiddenTools": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[^*]+\\*?$"
+            },
+            "description": "Host tool names whose presence in the agent's tool manifest contradicts the boundary: exact names, or a prefix ending in '*'. A general-purpose tool (a shell, say) that could also cross the boundary isn't caught by this list; the attempt is what tests it."
+          },
+          "attempt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "prompt"
+            ],
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The instruction given to the agent: attempt the forbidden action against the canary."
+              }
+            }
+          },
+          "canary": {
+            "type": "string",
+            "description": "The canary or dry-run target the attempt aims at, as the matrix's verification.target names it."
+          },
+          "refusal": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A regular expression the target's authorization refusal matches in the tool's error output. Without it, a call that ran and failed proves nothing: the result is inconclusive, never scope-denied."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$",
+      "maxLength": 128
+    }
+  }
+}

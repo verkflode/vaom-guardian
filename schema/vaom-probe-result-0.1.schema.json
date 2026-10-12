@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:verkflode:vaom:probe-result:0.1",
+  "title": "VAOM boundary probe result",
+  "description": "What one probe observed. 'observed' is the strongest mechanism shown to hold: absent (no forbidden tool in the agent's manifest), scope-denied (the tool was there and was called, and the target refused every call), policy (the tool was there, and the Guardian or its shim denied the attempt), crossed (the forbidden action reached the canary), or inconclusive (a forbidden tool was there, but the attempt never happened, or a call ran with no sign of either refusal or crossing). Evidence is kept as digests and tool names, never transcripts. A result is the runner's claim: the Guardian keeps it as evidence, it doesn't re-run it. Draft 0.1.",
+  "type": "object",
+  "required": [
+    "format",
+    "id",
+    "ts",
+    "boundary",
+    "probes",
+    "runner",
+    "host",
+    "observed",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "vaom.probe-result/0.1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "boundary": {
+      "$ref": "#/$defs/identifier"
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "description": "The probe set this ran."
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "observed": {
+      "enum": [
+        "absent",
+        "scope-denied",
+        "policy",
+        "crossed",
+        "inconclusive"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifestDigest",
+        "forbiddenPresent",
+        "attempted",
+        "denied",
+        "refused",
+        "canaryHit"
+      ],
+      "properties": {
+        "manifestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the sorted tool manifest the agent saw."
+        },
+        "forbiddenPresent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attempted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Forbidden tools the agent called."
+        },
+        "denied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Forbidden tools whose call was denied before it ran."
+        },
+        "refused": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Forbidden tools that ran and that the target refused (an authorization error from it)."
+        },
+        "canaryHit": {
+          "type": "boolean"
+        },
+        "transcriptDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$",
+      "maxLength": 128
+    }
+  }
+}

@@ -11,6 +11,7 @@
 //   noise wearing a warning light.
 // - Healthy ranges the paper gives as illustrative defaults (Section 8) are used only where the matrix
 //   is silent, and the report names them as defaults.
+import { assessBoundaries, type ProbeResult } from "../boundaries/probes.ts";
 import type { DecisionRecord } from "../record/record.ts";
 
 type Validated = any;
@@ -55,6 +56,8 @@ export interface ScorecardOptions {
   seeds?: readonly SeedOutcome[];
   /** Decided seeds a row needs before a verdict on detection. Default 10. */
   seedMinSample?: number;
+  /** Boundary probe results on record. Boundaries are judged as of the end of the period. */
+  probes?: readonly ProbeResult[];
 }
 
 export interface SeedOutcome {
@@ -92,7 +95,7 @@ export function scorecard(matrix: Validated, records: readonly DecisionRecord[],
     workflow: {
       oversightLoad: oversightLoad(matrix, inPeriod, weeks),
       chainIntegrity: { status: "not-measured", note: "refused spawns aren't in decision records yet" },
-      boundaryVerification: { status: "not-measured", note: "boundary probes aren't implemented yet" },
+      boundaryVerification: boundaryVerification(matrix, opts.probes ?? [], to),
     },
     agents: scopeDenials(inPeriod, minSample),
   };
@@ -226,6 +229,18 @@ function reviewEngagement(row: Validated, records: readonly DecisionRecord[], mi
     note: "aggregated per row; the approval threshold is the paper's default; modifications aren't recorded, only approvals and rejections",
     ...(diagnosis ? { diagnosis } : {}),
   };
+}
+
+/** 13. Boundary verification: every boundary held as claimed, within its schedule. */
+function boundaryVerification(matrix: Validated, probes: readonly ProbeResult[], at: number): Metric {
+  const all = assessBoundaries(matrix, probes, at);
+  if (all.length === 0) return { status: "not-measured", note: "the matrix relies on no boundaries" };
+  const by = (s: string) => all.filter((a) => a.status === s).map((a) => a.boundary);
+  const failed = by("failed"), weak = [...by("degraded"), ...by("overdue"), ...by("unverified")];
+  const boundaries = Object.fromEntries(all.map((a) => [a.boundary, { status: a.status, claimed: a.claimed, creditedAs: a.creditedAs, rows: a.rows, ...(a.last ? { last: a.last } : {}), ...(a.dueBy ? { dueBy: a.dueBy } : {}), note: a.note }]));
+  const diagnosis = failed.length ? `boundary crossed (${failed.join(", ")}): a circuit-breaker event for every dependent row`
+    : weak.length ? `counting below their claimed strength: ${weak.join(", ")}` : undefined;
+  return { status: diagnosis ? "breach" : "healthy", boundaries, note: "judged at the end of the period; an unverified or overdue boundary counts at policy strength", ...(diagnosis ? { diagnosis } : {}) };
 }
 
 /** 7. Required review hours per week against funded reviewer hours. */

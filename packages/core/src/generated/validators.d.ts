@@ -15,5 +15,7 @@ export const validateMatrix02: Validator;
 export const validateBinding01: Validator;
 export const validateScoring01: Validator;
 export const validateSeeds01: Validator;
+export const validateProbes01: Validator;
+export const validateProbeResult01: Validator;
 export const validateDecision03: Validator;
 export const validateDecision04: Validator;

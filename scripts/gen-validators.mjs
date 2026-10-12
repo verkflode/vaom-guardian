@@ -26,13 +26,15 @@ const targets = [
   {
     out: "packages/core/src/generated/validators.js",
     strict: true,
-    load: ["schema/vaom-matrix-0.1.schema.json", "schema/vaom-matrix-0.2.schema.json", "schema/vaom-binding.schema.json", "schema/vaom-scoring-0.1.schema.json", "schema/vaom-seeds-0.1.schema.json", "schema/vaom-decision-0.3.schema.json", "schema/vaom-decision-0.4.schema.json"],
+    load: ["schema/vaom-matrix-0.1.schema.json", "schema/vaom-matrix-0.2.schema.json", "schema/vaom-binding.schema.json", "schema/vaom-scoring-0.1.schema.json", "schema/vaom-seeds-0.1.schema.json", "schema/vaom-probes-0.1.schema.json", "schema/vaom-probe-result-0.1.schema.json", "schema/vaom-decision-0.3.schema.json", "schema/vaom-decision-0.4.schema.json"],
     exports: {
       validateMatrix01: "urn:verkflode:vaom:matrix:0.1",
       validateMatrix02: "urn:verkflode:vaom:matrix:0.2",
       validateBinding01: "urn:verkflode:vaom:binding:0.1",
       validateScoring01: "urn:verkflode:vaom:scoring:0.1",
       validateSeeds01: "urn:verkflode:vaom:seeds:0.1",
+      validateProbes01: "urn:verkflode:vaom:probes:0.1",
+      validateProbeResult01: "urn:verkflode:vaom:probe-result:0.1",
       validateDecision03: "urn:verkflode:vaom:decision:0.3",
       validateDecision04: "urn:verkflode:vaom:decision:0.4",
     },

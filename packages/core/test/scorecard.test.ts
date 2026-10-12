@@ -45,7 +45,8 @@ describe("the scorecard's shape", () => {
     const m = row(s).metrics;
     for (const k of ["bandAErrorRate", "staleKnowledgeShare", "seededDetection"]) expect(m[k]!.status).toBe("not-measured");
     expect(s.workflow.chainIntegrity!.status).toBe("not-measured");
-    expect(s.workflow.boundaryVerification!.status).toBe("not-measured");
+    // The invoice matrix relies on a boundary nobody has probed: it counts at policy strength, a breach.
+    expect(s.workflow.boundaryVerification).toMatchObject({ status: "breach", boundaries: { "no-contract-write": { status: "unverified", creditedAs: "policy" } } });
   });
   it("refuses a period that isn't one", () => {
     expect(() => scorecard(matrix02(), [], { from: TO, to: FROM })).toThrow();

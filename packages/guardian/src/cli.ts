@@ -2,18 +2,19 @@
 // vaom-guardian serve  --config guardian.json [--enroll label:role[,role...]]
 // vaom-guardian verify --config guardian.json
 // vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]
+// vaom-guardian probe import --config guardian.json result.json [result.json...]
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { scorecard, type Metric } from "@verkflode/vaom-guardian-core";
+import { scorecard, type Metric, type ProbeResult } from "@verkflode/vaom-guardian-core";
 import { createGuardian, readConfig } from "./guardian.ts";
-import { verifyEvidence } from "./evidence.ts";
+import { importProbeResults, verifyEvidence } from "./evidence.ts";
 import { createGuardianServer } from "./server.ts";
 import { Store } from "./store.ts";
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: { config: { type: "string" }, enroll: { type: "string" }, from: { type: "string" }, to: { type: "string" }, json: { type: "boolean" } } });
 const command = positionals[0];
-if (!values.config || (command !== "serve" && command !== "verify" && command !== "scorecard")) {
-  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]");
+if (!values.config || (command !== "serve" && command !== "verify" && command !== "scorecard" && !(command === "probe" && positionals[1] === "import"))) {
+  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]\n       vaom-guardian probe import --config guardian.json result.json [...]");
   process.exit(2);
 }
 const config = readConfig(values.config);
@@ -25,13 +26,24 @@ if (command === "verify") {
   process.exit(r.problems.length ? 1 : 0);
 }
 
+if (command === "probe") {
+  const files = positionals.slice(2);
+  if (files.length === 0) { console.error("probe import: name at least one result file"); process.exit(2); }
+  const r = importProbeResults(new Store(config.dataDir), JSON.parse(readFileSync(config.matrix, "utf8")), files.map((f) => ({ name: f, result: JSON.parse(readFileSync(f, "utf8")) })));
+  for (const x of r.rejected) console.error(`${x.name}: not imported: ${x.why}`);
+  for (const x of r.duplicates) console.log(`${x}: already imported`);
+  for (const x of r.imported) console.log(`imported ${x.boundary}: ${x.observed} (${x.ts})`);
+  process.exit(r.rejected.length ? 1 : 0);
+}
+
 if (command === "scorecard") {
   // Read-only: the evidence files and the matrix, no Guardian started. Default period: the last 7 days.
   const to = values.to ?? new Date().toISOString();
   const from = values.from ?? new Date(Date.parse(to) - 7 * 86_400_000).toISOString();
   const store = new Store(config.dataDir);
   const seeds = store.events().filter((e) => e.type === "seed-outcome").map((e) => ({ row: e.row as string, ts: e.ts, result: e.result as "detected" | "missed" | "expired" }));
-  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), store.records(), { from, to, seeds });
+  const probes = store.events().filter((e) => e.type === "probe-result").map((e) => e.result as ProbeResult);
+  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), store.records(), { from, to, seeds, probes });
   if (values.json) { console.log(JSON.stringify(s, null, 2)); process.exit(0); }
   const line = (name: string, m: Metric) => console.log(`  ${(m.status === "breach" ? "BREACH" : m.status).padEnd(19)}  ${name}${m.diagnosis ? `: ${m.diagnosis}` : ""}`);
   console.log(`Scorecard for ${s.matrix.id}@${s.matrix.version}, ${s.period.from} to ${s.period.to}: ${s.records} records`);

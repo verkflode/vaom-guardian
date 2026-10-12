@@ -3,9 +3,9 @@
 // (recomputing its challenge from the stored preimage), and every executed review or escalation against
 // an approval that names the same decision and role. Seeded cases: every approved seed's assertion is
 // checked like an approval, and no seed may ever appear as a decision record or be approved as one.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { verifyChain, type ContextEntry } from "@verkflode/vaom-guardian-acs";
-import { canonicalize, checkRecord } from "@verkflode/vaom-guardian-core";
+import { canonicalize, checkProbeResult, checkRecord, type ProbeResult } from "@verkflode/vaom-guardian-core";
 import type { Store } from "./store.ts";
 import { b64url, verifyAssertion, type Jwk } from "./webauthn.ts";
 
@@ -62,6 +62,30 @@ export function verifyEvidence(store: Store, origin: string, rpId = "localhost")
     }
     if ((o === "refuse" || o === "unplaceable") && r.resolution && r.resolution.result !== "not-executed") problems.push(`record ${r.id}: a ${o} decision resolved as ${r.resolution.result}`);
   }
+  for (const e of events) if (e.type === "probe-result") for (const f of checkProbeResult(e.result)) problems.push(`probe result ${e.id}: ${f.path} ${f.message}`);
   for (const e of events) if (e.type === "incident") problems.push(`incident ${e.id}: ${e.kind}${e.why ? ` (${e.why})` : ""}`);
   return { records: records.length, sessions: bySession.size, approvals: approvals.size, seeds: seeds.size, problems };
+}
+
+/**
+ * Append boundary probe results to the store, each checked against its schema and the matrix first. All
+ * or nothing: if any result is rejected, none is stored. A result is the runner's claim; the store keeps it
+ * as evidence, append-only, and the same result id is never stored twice.
+ */
+export function importProbeResults(store: Store, matrix: { boundaries?: Record<string, unknown>; id?: string }, files: { name: string; result: unknown }[]): { imported: ProbeResult[]; duplicates: string[]; rejected: { name: string; why: string }[] } {
+  const known = new Set(store.events().filter((e) => e.type === "probe-result").map((e) => (e.result as ProbeResult).id));
+  const imported: ProbeResult[] = [], duplicates: string[] = [], rejected: { name: string; why: string }[] = [];
+  for (const f of files) {
+    const problems = checkProbeResult(f.result).map((x) => `${x.path} ${x.message}`);
+    const r = f.result as ProbeResult;
+    if (!problems.length && !(r.boundary in (matrix.boundaries ?? {}))) problems.push(`boundary ${r.boundary} isn't in matrix ${matrix.id ?? ""}`);
+    if (problems.length) { rejected.push({ name: f.name, why: problems.join("; ") }); continue; }
+    if (known.has(r.id)) { duplicates.push(f.name); continue; }
+    known.add(r.id);
+    imported.push(r);
+  }
+  if (rejected.length) return { imported: [], duplicates, rejected };
+  const ts = new Date().toISOString();
+  store.appendEvents(imported.map((r) => ({ type: "probe-result", id: randomUUID(), ts, result: r })));
+  return { imported, duplicates, rejected };
 }

@@ -53,6 +53,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/probe:
+    dependencies:
+      '@verkflode/vaom-guardian-core':
+        specifier: workspace:*
+        version: link:../core
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
