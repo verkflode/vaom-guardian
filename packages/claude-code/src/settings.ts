@@ -23,6 +23,8 @@ export function hookSettings(i: SettingsInput): unknown {
       PreToolUse: tool(HOOK_TIMEOUT_SECONDS),
       PostToolUse: tool(30),
       PostToolUseFailure: tool(30),
+      SubagentStart: session(30),
+      SubagentStop: session(30),
       SessionEnd: session(10),
     },
   };

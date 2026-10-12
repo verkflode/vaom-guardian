@@ -229,6 +229,9 @@ const STEPS: Record<string, Step> = {
   "steps/sessionEnd": {
     run(i) {
       const { deps } = inside(this);
+      // A session's authority ends with it: its root context, and the context a sub-agent session was
+      // derived with at subagentStart, which this session never opened itself.
+      for (const c of deps.contexts.liveFor(i.sid, i.now)) deps.contexts.close(c.id);
       if (i.s.context) deps.contexts.close(i.s.context);
       i.s.ended = true;
       return { decision: "allow" };

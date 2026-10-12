@@ -51,7 +51,7 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
 
   Set it up: `node packages/claude-code/src/cli.ts settings --guardian <guardian.json> --agent <agent id>` prints the hooks for Claude Code's settings, routing every tool through the shim and disabling bypass mode. Keep allow-rules for governed tools out of your settings: the Guardian's `allow` should be the only pre-approval. A run under a real Claude Code is in [`experiments/claude-code-shim/`](experiments/claude-code-shim/).
 
-  **Scope:** sub-agent tool calls arrive on their parent's Claude Code session and are decided under the parent's context, not a derived one. Mapping Claude Code's sub-agents onto ACS `subagentStart` is still to do.
+  - **Sub-agents:** a call to Claude Code's `Agent` tool is a spawn, decided as ACS `subagentStart`. The Guardian derives an attenuated context for that sub-agent type, or denies the spawn. The sub-agent then speaks on its own ACS session as `{agent}/{type}`, so every call it makes is decided under the derived context. When it stops, its session ends and its context closes, freeing its place in the parent's fan-out. A sub-agent Claude Code starts without an allowed spawn has no session, and every call it makes is denied. Claude Code doesn't link `SubagentStart` to the `Agent` call that caused it. So two spawns of the same type in flight at once may be matched to each other's sub-agent. Both were allowed the same pattern under the same parent, so this changes which spawn the evidence links a sub-agent to, never what it may do.
 
 Where confidence scores come from is still open; with no scorer, every delegable call routes as low confidence.
 

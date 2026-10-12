@@ -263,7 +263,7 @@ describe("session lifecycle", () => {
     const o = shim(r);
     expect(decision(await runHook(pre("mcp__telemetry__query", { query: "a" }), o))).toBe("allow");
     const s = o.state.read(CC)!;
-    o.state.write(CC, { ...s, chain_hash: "f".repeat(64) });
+    o.state.write(CC, { ...s, sessions: { ...s.sessions, [s.acs_session]: { chain_hash: "f".repeat(64), negotiated: true } } });
     const out = await runHook(pre("mcp__telemetry__query", { query: "b" }), o);
     expect(decision(out)).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/chain_mismatch/);
@@ -280,6 +280,117 @@ describe("session lifecycle", () => {
     await r.stop();
     const down = await runHook({ hook_event_name: "SessionStart", session_id: CC, source: "startup" }, o);
     expect(down.systemMessage).toMatch(/denied until it answers/);
+  });
+});
+
+describe("sub-agents: Agent calls become subagentStart, sub-agent calls run on their own session", () => {
+  const agentCall = (type?: string, extra: Record<string, unknown> = {}) => pre("Agent", { description: "investigate", prompt: "look at the logs", ...(type ? { subagent_type: type } : {}) }, extra);
+  const started = (agentId: string, type: string) => ({ hook_event_name: "SubagentStart", session_id: CC, agent_id: agentId, agent_type: type });
+  const stopped = (agentId: string, type: string) => ({ hook_event_name: "SubagentStop", session_id: CC, agent_id: agentId, agent_type: type, stop_hook_active: false });
+  const as = (agentId: string, type: string) => ({ agent_id: agentId, agent_type: type });
+  const chain = (r: Running) => r.g.store.chain();
+
+  it("derives a context for an allowed type: the sub-agent may read telemetry, not restart", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    const spawn = agentCall("log-analysis");
+    expect(decision(await runHook(spawn, o))).toBe("allow");
+    expect(await runHook(started("a1", "log-analysis"), o)).toBeNull();
+    const read = pre("mcp__telemetry__query", { query: "errors" }, as("a1", "log-analysis"));
+    expect(decision(await runHook(read, o))).toBe("allow");
+    expect(await runHook(post({ ...read }), o)).toBeNull();
+    expect(decision(await runHook(pre("mcp__deploy__rolling_restart", { incident_id: "INC-7", service: "web", stateless: true }, as("a1", "log-analysis")), o))).toBe("deny");
+
+    const s = o.state.read(CC)!;
+    const sub = s.agents.a1!.session;
+    expect(sub).not.toBe(s.acs_session);
+    const rec = r.g.store.records().filter((x) => x.request.action.tool === "mcp__telemetry__query").at(-1)!;
+    expect(rec.request.session.id).toBe(sub);
+    expect(rec.request.agent.id).toBe(`${AGENT}/log-analysis`);
+    expect(rec.resolution?.result).toBe("executed");
+
+    expect(await runHook(stopped("a1", "log-analysis"), o)).toBeNull();
+    expect(await runHook(post(spawn), o)).toBeNull();
+    expect(o.state.read(CC)!.agents).toEqual({});
+    const steps = chain(r).map((c) => `${c.session === sub ? "sub" : "root"}:${c.entry.step_type}`);
+    expect(steps).toEqual(["root:sessionStart", "root:subagentStart", "sub:toolCallRequest", "sub:toolCallResult", "sub:toolCallRequest", "sub:sessionEnd", "root:subagentStop"]);
+    expect(verifyEvidence(new Store(r.g.config.dataDir), r.g.origin).problems).toEqual([]);
+  });
+
+  it("frees the sub-agent's place when it stops: the pattern allows one log-analysis at a time", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("allow");
+    await runHook(started("a1", "log-analysis"), o);
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("deny");
+    await runHook(stopped("a1", "log-analysis"), o);
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("allow");
+  });
+
+  it("matches SubagentStart to a pending spawn of its own type, not just the oldest", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    expect(decision(await runHook(agentCall("dependency-check"), o))).toBe("allow");
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("allow");
+    await runHook(started("l1", "log-analysis"), o);
+    await runHook(started("d1", "dependency-check"), o);
+    // Only the dependency-check pattern reaches upstream status.
+    expect(decision(await runHook(pre("mcp__status__upstream", { service: "payments" }, as("l1", "log-analysis")), o))).toBe("deny");
+    expect(decision(await runHook(pre("mcp__status__upstream", { service: "payments" }, as("d1", "dependency-check")), o))).toBe("allow");
+  });
+
+  it("denies a spawn outside the allowed patterns, including Claude Code's default type", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    const out = await runHook(agentCall(), o);
+    expect(decision(out)).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/general-purpose is outside the allowed patterns/);
+    expect(decision(await runHook(agentCall("shell"), o))).toBe("deny");
+  });
+
+  it("denies every call of a sub-agent that started without an allowed spawn, and reports what it ran", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    await runHook(pre("mcp__telemetry__query", { query: "x" }), o); // the root session exists
+    const out = await runHook(started("stray", "log-analysis"), o);
+    expect(out.hookSpecificOutput.additionalContext).toMatch(/not started through the Guardian/);
+    const call = pre("mcp__telemetry__query", { query: "x" }, as("stray", "log-analysis"));
+    const d = await runHook(call, o);
+    expect(decision(d)).toBe("deny");
+    expect(d.hookSpecificOutput.permissionDecisionReason).toMatch(/not started through the Guardian/);
+    expect(await runHook(post(call), o)).toMatchObject({ decision: "block" });
+    expect(r.g.store.events().filter((e) => e.type === "incident")).toEqual([expect.objectContaining({ kind: "unlinked-result" })]);
+  });
+
+  it("ends an allowed spawn that never started when its Agent call returns", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    const spawn = agentCall("log-analysis");
+    expect(decision(await runHook(spawn, o))).toBe("allow");
+    expect(await runHook(post(spawn, "PostToolUseFailure"), o)).toBeNull();
+    expect(o.state.read(CC)!.spawns).toEqual([]);
+    expect(chain(r).at(-1)!.entry.step_type).toBe("subagentStop");
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("allow");
+  });
+
+  it("lets a sub-agent's spawn go only as deep as the matrix allows (depth one here)", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    expect(decision(await runHook(agentCall("dependency-check"), o))).toBe("allow");
+    await runHook(started("d1", "dependency-check"), o);
+    const out = await runHook(agentCall("log-analysis", as("d1", "dependency-check")), o);
+    expect(decision(out)).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/authority_breach/);
+  });
+
+  it("ends sub-agents with the session", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    expect(decision(await runHook(agentCall("log-analysis"), o))).toBe("allow");
+    await runHook(started("a1", "log-analysis"), o);
+    await runHook({ hook_event_name: "SessionEnd", session_id: CC, reason: "prompt_input_exit" }, o);
+    expect(chain(r).map((c) => c.entry.step_type).slice(-3)).toEqual(["sessionEnd", "subagentStop", "sessionEnd"]);
+    expect(o.state.read(CC)).toBeNull();
   });
 });
 

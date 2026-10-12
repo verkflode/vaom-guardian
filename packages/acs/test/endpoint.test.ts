@@ -256,6 +256,14 @@ describe("sub-agents (7D: two read-only sub-agents, depth one)", () => {
     expect(send(s, "steps/toolCallRequest", tool("mcp__telemetry__query", { q: "errors" }), { session: SUB, agent: `${AGENT}/log-analysis` }).result.decision).toBe("allow");
     expect(send(s, "steps/toolCallRequest", restart("INC-7"), { session: SUB, agent: `${AGENT}/log-analysis` }).result.decision).not.toBe("allow");
   });
+  it("closes a derived context when the sub-agent's session ends, freeing its place in the fan-out", () => {
+    const s = started();
+    const sub = { session: SUB, agent: `${AGENT}/log-analysis` };
+    expect(spawn(s, "log-analysis").result.decision).toBe("allow");
+    send(s, "handshake/hello", hello, sub);
+    send(s, "steps/sessionEnd", { reason: "completed" }, sub);
+    expect(spawn(s, "log-analysis", "33333333-3333-4333-8333-333333333333").result.decision).toBe("allow");
+  });
   it("denies a type outside the allowed patterns, and a third spawn past the fan-out", () => {
     const s = started();
     expect(spawn(s, "shell").result.decision).toBe("deny");

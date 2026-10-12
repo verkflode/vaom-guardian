@@ -1,6 +1,7 @@
 // Per-session shim state. Claude Code starts one shim process per hook call, so whatever must outlive a
 // call lives here: which ACS session this Claude Code session speaks as, the shim's view of the chain
-// head, and which ACS request each tool_use_id was decided under (PreToolUse and PostToolUse share it).
+// head, which ACS request each tool_use_id was decided under (PreToolUse and PostToolUse share it), and
+// which ACS session each of its sub-agents speaks as.
 //
 // Parallel tool calls run their hooks at the same time, so every read-modify-write of a session's state
 // happens under a lock: a directory created with mkdir, which is atomic. A lock is held for one round
@@ -8,16 +9,31 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
-export interface CallState { request_id: string; tool: string }
+export interface CallState { request_id: string; tool: string; session: string }
 
-export interface SessionState {
-  format: "vaom-guardian.shim-state/0.1";
-  /** The ACS session this Claude Code session speaks as. A fresh one after the Guardian restarts. */
-  acs_session: string;
+/** An ACS session the shim speaks as: the Claude Code session's own, or one per sub-agent. */
+export interface AcsSessionState {
   /** The chain head from the Guardian's last signed answer: the shim's claim on the next request (§8.6). */
   chain_hash: string | null;
+  /** Whether handshake/hello has been answered for it. A sub-agent's session negotiates on first use. */
+  negotiated: boolean;
+}
+
+/** A spawn the Guardian allowed (subagentStart): its ACS session, the agent id it speaks as, the session
+ *  that spawned it, and the Agent call that asked for it. */
+export interface SpawnState { session: string; agent_type: string; agent_id: string; parent: string; tool_use_id: string }
+
+export interface SessionState {
+  format: "vaom-guardian.shim-state/0.2";
+  /** The ACS session this Claude Code session speaks as. A fresh one after the Guardian restarts. */
+  acs_session: string;
+  sessions: Record<string, AcsSessionState>;
   /** tool_use_id -> the request it was decided under; removed when PostToolUse reports it. */
   calls: Record<string, CallState>;
+  /** Allowed spawns, oldest first, waiting for Claude Code's SubagentStart. */
+  spawns: SpawnState[];
+  /** Claude Code agent_id -> the sub-agent's ACS session. */
+  agents: Record<string, SpawnState>;
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -41,7 +57,7 @@ export class StateDir {
     let raw: string;
     try { raw = readFileSync(this.file(session), "utf8"); } catch { return null; }
     const s = JSON.parse(raw);
-    if (s?.format !== "vaom-guardian.shim-state/0.1") throw new Error("shim state file has an unknown format");
+    if (s?.format !== "vaom-guardian.shim-state/0.2") throw new Error("shim state file has an unknown format");
     return s as SessionState;
   }
 

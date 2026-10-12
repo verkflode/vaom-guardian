@@ -56,13 +56,19 @@ export class GuardianClient {
    * handshake answer is unsigned (§4), so nothing in it widens what the shim does: the shim applies deny
    * on failure whatever the Guardian declares.
    */
-  async call(session: string, method: string, payload: Json, chainHash: string | null, requestId: string = randomUUID()): Promise<Json> {
+  /** The agent id this shim speaks as. A sub-agent speaks as "{agentId}/{sub-agent type}". */
+  get agentId(): string {
+    return this.cfg.agentId;
+  }
+
+  async call(session: string, method: string, payload: Json, chainHash: string | null, o: { requestId?: string; agentId?: string } = {}): Promise<Json> {
+    const requestId = o.requestId ?? randomUUID();
     const key = sessionKey(this.cfg.ikm, session);
     const env = sign({
       jsonrpc: "2.0", id: ++this.id, method,
       params: {
         acs_version: ACS_SPEC_VERSION, request_id: requestId, timestamp: new Date().toISOString(), nonce: randomBytes(16).toString("hex"),
-        metadata: { agent_id: this.cfg.agentId, session_id: session, ...(chainHash !== null ? { session_state: { chain_hash: chainHash } } : {}) },
+        metadata: { agent_id: o.agentId ?? this.cfg.agentId, session_id: session, ...(chainHash !== null ? { session_state: { chain_hash: chainHash } } : {}) },
         payload,
       },
     }, key, this.cfg.keyId);
