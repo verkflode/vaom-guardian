@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // vaom-guardian serve  --config guardian.json [--enroll label:role[,role...]]
 // vaom-guardian verify --config guardian.json
+// vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { scorecard, type Metric } from "@verkflode/vaom-guardian-core";
 import { createGuardian, readConfig } from "./guardian.ts";
 import { verifyEvidence } from "./evidence.ts";
 import { createGuardianServer } from "./server.ts";
 import { Store } from "./store.ts";
 
-const { positionals, values } = parseArgs({ allowPositionals: true, options: { config: { type: "string" }, enroll: { type: "string" } } });
+const { positionals, values } = parseArgs({ allowPositionals: true, options: { config: { type: "string" }, enroll: { type: "string" }, from: { type: "string" }, to: { type: "string" }, json: { type: "boolean" } } });
 const command = positionals[0];
-if (!values.config || (command !== "serve" && command !== "verify")) {
-  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json");
+if (!values.config || (command !== "serve" && command !== "verify" && command !== "scorecard")) {
+  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]");
   process.exit(2);
 }
 const config = readConfig(values.config);
@@ -20,6 +23,21 @@ if (command === "verify") {
   console.log(`${r.records} records, ${r.sessions} sessions, ${r.approvals} approvals`);
   for (const p of r.problems) console.log(`PROBLEM ${p}`);
   process.exit(r.problems.length ? 1 : 0);
+}
+
+if (command === "scorecard") {
+  // Read-only: the evidence files and the matrix, no Guardian started. Default period: the last 7 days.
+  const to = values.to ?? new Date().toISOString();
+  const from = values.from ?? new Date(Date.parse(to) - 7 * 86_400_000).toISOString();
+  const s = scorecard(JSON.parse(readFileSync(config.matrix, "utf8")), new Store(config.dataDir).records(), { from, to });
+  if (values.json) { console.log(JSON.stringify(s, null, 2)); process.exit(0); }
+  const line = (name: string, m: Metric) => console.log(`  ${(m.status === "breach" ? "BREACH" : m.status).padEnd(19)}  ${name}${m.diagnosis ? `: ${m.diagnosis}` : ""}`);
+  console.log(`Scorecard for ${s.matrix.id}@${s.matrix.version}, ${s.period.from} to ${s.period.to}: ${s.records} records`);
+  for (const r of s.rows) { console.log(`\n${r.row} (${r.decisions} ${r.decisions === 1 ? "decision" : "decisions"})`); for (const [k, m] of Object.entries(r.metrics)) line(k, m); }
+  console.log("\nworkflow"); for (const [k, m] of Object.entries(s.workflow)) line(k, m);
+  console.log("\nagents"); for (const [k, m] of Object.entries(s.agents)) line(`scope denials, ${k}`, m);
+  console.log("\n--json gives every value, target and note.");
+  process.exit(0);
 }
 
 const g = createGuardian(config);

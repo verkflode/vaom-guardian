@@ -17,3 +17,4 @@ export { recordedGroup, recordFact } from "./record/record.ts";
 export { ContextRegistry, DEFAULT_CONTEXT_LIFETIME, type Context, type ContextSpec, type DeriveResult } from "./authority/contexts.ts";
 export { LeaseRegistry, type Health, type Lease } from "./authority/leases.ts";
 export type { LiveContext } from "./eval/types.ts";
+export { scorecard, SCORECARD_FORMAT, PAPER_DEFAULTS, type Metric, type RowScorecard, type Scorecard, type ScorecardOptions, type Status } from "./scorecard/scorecard.ts";
