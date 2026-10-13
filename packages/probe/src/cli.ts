@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // vaom-probe run --probes probes.json --matrix matrix.json --project <agent project dir>
 //                [--mcp-config mcp.json] [--claude cmd] [--model m] [--only boundary] [--out dir] [--keep-transcripts]
-//                [--setting-sources project|user,project,local]
+//                [--setting-sources project|user,project,local] [--no-grant]
 // Runs each probe as a real Claude Code session and writes one vaom.probe-result file per boundary, for
-// `vaom-guardian probe import`. Probes attempt forbidden actions: point them at canaries, never at live
-// systems, as the probe set and the matrix's verification targets say.
+// `vaom-guardian probe import`. The probed tools are granted for the session (--allowedTools), so only a
+// hook or a deny rule can stop them; --no-grant leaves the project's permissions as they are.
+// Probes attempt forbidden actions: point them at canaries, never at live systems, as the probe set and
+// the matrix's verification targets say.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -14,7 +16,7 @@ import { RUNNER, runProbe, type ProbeSet } from "./claude-code.ts";
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   probes: { type: "string" }, matrix: { type: "string" }, project: { type: "string" }, "mcp-config": { type: "string" },
-  claude: { type: "string" }, model: { type: "string" }, only: { type: "string" }, out: { type: "string" }, "keep-transcripts": { type: "boolean" }, "setting-sources": { type: "string" },
+  claude: { type: "string" }, model: { type: "string" }, only: { type: "string" }, out: { type: "string" }, "keep-transcripts": { type: "boolean" }, "setting-sources": { type: "string" }, "no-grant": { type: "boolean" },
 } });
 if (positionals[0] !== "run" || !values.probes || !values.matrix || !values.project) {
   console.error("usage: vaom-probe run --probes probes.json --matrix matrix.json --project <dir> [--mcp-config mcp.json] [--claude cmd] [--model m] [--only boundary] [--out dir]");
@@ -41,6 +43,7 @@ for (const p of chosen) {
       ...(values.claude ? { claude: values.claude } : {}),
       ...(values.model ? { model: values.model } : {}),
       ...(values["setting-sources"] ? { settingSources: values["setting-sources"] } : {}),
+      ...(values["no-grant"] ? { grantProbedTools: false } : {}),
     }));
   } catch (e) {
     result = {

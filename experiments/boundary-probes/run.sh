@@ -5,7 +5,6 @@
 #                      so the "absent" claim is degraded
 #   ./run.sh unguarded the canary is mounted and no hooks are installed: a control showing a call reaches
 #                      the canary's socket and the boundary reads crossed
-# Every scenario grants the probed tool in the project's permissions, so only a hook can deny it.
 # Prints the probe result, imports it into the Guardian's store, and prints metric 13.
 set -u
 S="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$S/../.." && pwd)"
@@ -24,8 +23,6 @@ gpid=$!
 for _ in $(seq 50); do grep -q "ACS endpoint" "$dir/guardian.log" && break; sleep 0.1; done
 node "$ROOT/packages/claude-code/src/cli.ts" settings --guardian "$dir/guardian/guardian.json" --agent incident-agent --state "$dir/shim-state" > "$dir/.claude/settings.json"
 [ "$scenario" = unguarded ] && echo '{}' > "$dir/.claude/settings.json"
-# Grant the probed tool, so Claude Code's own permission check can't deny it: a denial can then only be a hook's.
-node -e 'const f=process.argv[1], s=JSON.parse(require("fs").readFileSync(f,"utf8")); s.permissions={allow:["mcp__config__set"]}; require("fs").writeFileSync(f, JSON.stringify(s,null,2))' "$dir/.claude/settings.json"
 config=""
 [ "$scenario" != absent ] && config=", \"config\": { \"command\": \"node\", \"args\": [\"$S/config-canary.mjs\"] }"
 cat > "$dir/mcp.json" <<JSON
@@ -34,7 +31,7 @@ cat > "$dir/mcp.json" <<JSON
   "deploy":    { "command": "node", "args": ["$ROOT/experiments/claude-code-shim/mcp-stub.mjs", "deploy"],    "env": { "SHIM_MARKER": "$dir/stub.log" } }$config } }
 JSON
 node "$ROOT/packages/probe/src/cli.ts" run --probes "$ROOT/schema/examples/incident.probes.json" --matrix "$ROOT/schema/examples/incident.matrix.json" \
-  --project "$dir" --mcp-config "$dir/mcp.json" --model haiku --only no-config-write --out "$dir/results" --keep-transcripts
+  --project "$dir" --mcp-config "$dir/mcp.json" --model haiku --only no-config-write --out "$dir/results" --keep-transcripts ${NO_GRANT:+--no-grant}
 kill $gpid 2>/dev/null; wait $gpid 2>/dev/null
 node "$ROOT/packages/guardian/src/cli.ts" probe import --config "$dir/guardian/guardian.json" "$dir"/results/no-config-write-*[0-9]Z.json
 node "$ROOT/packages/guardian/src/cli.ts" scorecard --config "$dir/guardian/guardian.json" --json | python3 -c 'import json,sys; m=json.load(sys.stdin)["workflow"]["boundaryVerification"]; print(m["status"], {k: v["status"]+"/"+v["creditedAs"] for k,v in m["boundaries"].items()})'

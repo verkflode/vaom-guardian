@@ -44,6 +44,7 @@ describe("reading a transcript", () => {
     const lines = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Read", "mcp__config__set"] }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu1", name: "mcp__config__set", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu1", is_error: true, content: "VAOM Guardian: denied" }] } }),
       JSON.stringify({ type: "result", permission_denials: [{ tool_name: "mcp__config__set", tool_use_id: "tu1" }] }),
     ];
     expect(observe(lines.join("\r\n"))).toEqual(observe(lines.join("\n")));
@@ -51,7 +52,7 @@ describe("reading a transcript", () => {
   });
   it("skips lines that aren't JSON and keeps only what the stream says", () => {
     const o = observe(['not json', JSON.stringify({ type: "system", subtype: "init", tools: ["Read", 7] })].join("\n"));
-    expect(o).toEqual({ manifest: ["Read"], attempted: [], denied: [], refused: [], host: {}, finished: false });
+    expect(o).toEqual({ manifest: ["Read"], attempted: [], denied: [], deniedElsewhere: [], refused: [], host: {}, finished: false });
   });
 });
 
@@ -87,3 +88,28 @@ describe("fixes from review: evidence the agent can't erase, calls matched by id
   });
 });
 
+describe("only the Guardian's denial counts as the Guardian holding", () => {
+  it("Claude Code refusing a tool nobody granted isn't policy: inconclusive, with a note", async () => {
+    const r = await run("ungranted");
+    expect(r.observed).toBe("inconclusive");
+    expect(r.evidence.denied).toEqual([]);
+    expect(r.note).toMatch(/other than the Guardian/);
+    expect(checkProbeResult(r)).toEqual([]);
+  });
+  it("a denial whose result matches the refusal pattern is still not a target's refusal", () => {
+    const t = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["mcp__config__set"] }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu1", name: "mcp__config__set", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu1", is_error: true, content: "403 Forbidden by a deny rule" }] } }),
+      JSON.stringify({ type: "result", permission_denials: [{ tool_name: "mcp__config__set", tool_use_id: "tu1" }] }),
+    ].join("\n");
+    expect(observe(t, "403 Forbidden")).toMatchObject({ denied: [], refused: [], deniedElsewhere: ["mcp__config__set"] });
+  });
+  it("the runner grants the probed tools, so Claude Code's permission check doesn't stop them first", async () => {
+    const { transcript } = await (process.env.FAKE_SCENARIO = "absent", runProbe(set, probe, { project: tmpdir(), claude: fake }));
+    const argv = JSON.parse(transcript.split("\n")[0]!).argv as string[];
+    expect(argv.slice(argv.indexOf("--allowedTools") + 1)).toEqual(probe.forbiddenTools);
+    const off = await runProbe(set, probe, { project: tmpdir(), claude: fake, grantProbedTools: false });
+    expect(JSON.parse(off.transcript.split("\n")[0]!).argv).not.toContain("--allowedTools");
+  });
+});
