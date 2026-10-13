@@ -3,6 +3,9 @@
 #   ./run.sh absent    no config tool is mounted: the boundary should hold as claimed (absent)
 #   ./run.sh mounted   a config-writer canary is mounted: the Guardian should deny the call (policy),
 #                      so the "absent" claim is degraded
+#   ./run.sh unguarded the canary is mounted and no hooks are installed: a control showing a call reaches
+#                      the canary's socket and the boundary reads crossed
+# Every scenario grants the probed tool in the project's permissions, so only a hook can deny it.
 # Prints the probe result, imports it into the Guardian's store, and prints metric 13.
 set -u
 S="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$S/../.." && pwd)"
@@ -20,8 +23,11 @@ node "$ROOT/packages/guardian/src/cli.ts" serve --config "$dir/guardian/guardian
 gpid=$!
 for _ in $(seq 50); do grep -q "ACS endpoint" "$dir/guardian.log" && break; sleep 0.1; done
 node "$ROOT/packages/claude-code/src/cli.ts" settings --guardian "$dir/guardian/guardian.json" --agent incident-agent --state "$dir/shim-state" > "$dir/.claude/settings.json"
+[ "$scenario" = unguarded ] && echo '{}' > "$dir/.claude/settings.json"
+# Grant the probed tool, so Claude Code's own permission check can't deny it: a denial can then only be a hook's.
+node -e 'const f=process.argv[1], s=JSON.parse(require("fs").readFileSync(f,"utf8")); s.permissions={allow:["mcp__config__set"]}; require("fs").writeFileSync(f, JSON.stringify(s,null,2))' "$dir/.claude/settings.json"
 config=""
-[ "$scenario" = mounted ] && config=", \"config\": { \"command\": \"node\", \"args\": [\"$S/config-canary.mjs\"] }"
+[ "$scenario" != absent ] && config=", \"config\": { \"command\": \"node\", \"args\": [\"$S/config-canary.mjs\"] }"
 cat > "$dir/mcp.json" <<JSON
 { "mcpServers": {
   "telemetry": { "command": "node", "args": ["$ROOT/experiments/claude-code-shim/mcp-stub.mjs", "telemetry"], "env": { "SHIM_MARKER": "$dir/stub.log" } },
