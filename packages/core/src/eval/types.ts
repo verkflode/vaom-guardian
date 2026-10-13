@@ -101,6 +101,9 @@ export interface Placement {
   facts: Record<string, FactValue>;
   /** Absent for preparatory and non-delegable placements, and for any placement that stopped before scoring. */
   score?: PlacementScore;
+  /** The live contexts that authorised this placement (scope, task and observation all checked). Not
+   *  recorded per placement; the record names the first. */
+  contexts?: string[];
   reasons: Reason[];
 }
 

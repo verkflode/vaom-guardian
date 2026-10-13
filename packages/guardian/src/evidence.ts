@@ -3,6 +3,10 @@
 // (recomputing its challenge from the stored preimage), and every executed review or escalation against
 // an approval that names the same decision and role. Seeded cases: every approved seed's assertion is
 // checked like an approval, and no seed may ever appear as a decision record or be approved as one.
+// Records are tied to the chain: a record names the chain entry its request made, and that entry must be
+// there. A credential's approvals after its revocation are problems. What it can't see: entries cut off the
+// end of a chain after a session's last decision (observed steps carry no record to cross-check), and a
+// deleted rejection or expiry (the record then reads as still open, which is reported).
 import { createHash, randomUUID } from "node:crypto";
 import { verifyChain, type ContextEntry } from "@verkflode/vaom-guardian-acs";
 import { canonicalize, checkProbeResult, checkRecord, type ProbeResult } from "@verkflode/vaom-guardian-core";
@@ -15,6 +19,9 @@ export interface EvidenceReport {
   approvals: number;
   seeds: number;
   problems: string[];
+  /** Decisions never resolved: an allowed call whose result never came, or an approved one whose
+   *  execution was never reported (say, across a restart). Their cap use stays counted. Not problems. */
+  open: string[];
 }
 
 export function verifyEvidence(store: Store, origin: string, rpId = "localhost"): EvidenceReport {
@@ -25,18 +32,26 @@ export function verifyEvidence(store: Store, origin: string, rpId = "localhost")
   const bySession = new Map<string, ContextEntry[]>();
   for (const { session, entry } of store.chain()) bySession.set(session, [...(bySession.get(session) ?? []), entry]);
   for (const [s, entries] of bySession) if (!verifyChain(entries)) problems.push(`session ${s}: hash chain does not verify`);
+  const hashes = new Map([...bySession].map(([s, es]) => [s, new Set(es.map((e) => e.entry_hash))]));
+  for (const r of records) {
+    const h = r.request.wire?.chain_hash;
+    if (h && !hashes.get(r.request.session.id)?.has(h)) problems.push(`record ${r.id}: its chain entry ${h.slice(0, 12)}... is missing from session ${r.request.session.id}'s chain`);
+  }
 
   const events = store.events();
   const keys = new Map<string, { jwk: Jwk; roles: string[] }>();
   const approvals = new Map<string, { decision: string; role: string }>();
   const seeds = new Set(events.filter((e) => e.type === "seed-planted").map((e) => e.decision as string));
+  const revoked = new Map<string, string>();
   for (const e of events) {
     if (e.type === "enrolled") keys.set(e.credential_id as string, { jwk: e.jwk as Jwk, roles: e.roles as string[] });
+    if (e.type === "credential-revoked") revoked.set(e.credential_id as string, e.ts);
     const seedApproval = e.type === "seed-outcome" && e.result === "missed";
     if (e.type !== "approval" && !seedApproval) continue;
     if (e.type === "approval" && seeds.has(e.decision as string)) problems.push(`approval ${e.id}: approves a planted case as a real decision`);
     const key = keys.get(e.credential_id as string);
     if (!key) { problems.push(`${e.type} ${e.id}: credential was never enrolled`); continue; }
+    if (revoked.has(e.credential_id as string)) problems.push(`${e.type} ${e.id}: made with credential ${e.credential_id} after it was revoked (${revoked.get(e.credential_id as string)})`);
     if (!key.roles.includes(e.approver_role as string)) problems.push(`${e.type} ${e.id}: credential doesn't hold ${e.approver_role}`);
     const pre = e.challenge_preimage as Record<string, string>;
     if (pre.decision !== e.decision || pre.approver_role !== e.approver_role || pre.request_id !== e.request_id) problems.push(`${e.type} ${e.id}: challenge preimage names a different decision`);
@@ -48,7 +63,8 @@ export function verifyEvidence(store: Store, origin: string, rpId = "localhost")
     } catch (err) { problems.push(`${e.type} ${e.id}: ${(err as Error).message}`); }
     if (seedApproval) continue;
     const rec = records.find((r) => r.id === e.decision);
-    if (rec && rec.request.action.params_digest !== pre.params_digest) problems.push(`approval ${e.id}: approved different arguments than the decision recorded`);
+    if (!rec) problems.push(`approval ${e.id}: approves decision ${e.decision}, which has no record`);
+    else if (rec.request.action.params_digest !== pre.params_digest) problems.push(`approval ${e.id}: approved different arguments than the decision recorded`);
     approvals.set(e.id, { decision: e.decision as string, role: e.approver_role as string });
   }
   for (const r of records) if (seeds.has(r.id)) problems.push(`record ${r.id}: a planted case became a decision record`);
@@ -74,7 +90,8 @@ export function verifyEvidence(store: Store, origin: string, rpId = "localhost")
   }
   for (const e of events) if (e.type === "probe-result") for (const f of checkProbeResult(e.result)) problems.push(`probe result ${e.id}: ${f.path} ${f.message}`);
   for (const e of events) if (e.type === "incident") problems.push(`incident ${e.id}: ${e.kind}${e.why ? ` (${e.why})` : ""}`);
-  return { records: records.length, sessions: bySession.size, approvals: approvals.size, seeds: seeds.size, problems };
+  const open = records.filter((r) => !r.resolution).map((r) => r.id);
+  return { records: records.length, sessions: bySession.size, approvals: approvals.size, seeds: seeds.size, problems, open };
 }
 
 /**

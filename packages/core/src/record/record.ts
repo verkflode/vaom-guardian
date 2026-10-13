@@ -173,5 +173,21 @@ export function resolveRecord(record: DecisionRecord, resolution: Resolution): D
 /** Validate a record against its format's schema (vaom.decision/0.4, or 0.3 for older evidence). Empty means valid. */
 export function checkRecord(record: unknown): Finding[] {
   const v = (record as { format?: unknown } | null)?.format === "vaom.decision/0.3" ? validateDecision03 : validateDecision04;
-  return v(record) ? [] : schemaFindings(v.errors);
+  if (!v(record)) return schemaFindings(v.errors);
+  const c = combination((record as DecisionRecord).decision);
+  return c ? [{ rule: "decision.combination", severity: "error", path: "/decision", message: c }] : [];
+}
+
+const RANK = { A: 0, B: 1, C: 2, "non-delegable": 3 } as const;
+
+/** Is the decision the one its placements combine to? A refusal wins, then anything unplaceable, then the
+ *  strictest band. (The schema ties the outcome to the band; this ties the band to the placements.) */
+function combination(d: DecisionRecord["decision"]): string | null {
+  const ps = d.placements;
+  if (ps.some((p) => p.outcome === "refuse")) return d.outcome === "refuse" ? null : `a placement refuses, but the decision is ${d.outcome}`;
+  if (ps.some((p) => p.outcome === "unplaceable")) return d.outcome === "unplaceable" ? null : `a placement is unplaceable, but the decision is ${d.outcome}`;
+  if (d.outcome === "unplaceable") return null; // approver conflicts and failures before placing
+  const banded = ps.map((p) => p.band).filter((b): b is Exclude<typeof b, null> => b !== null);
+  const strictest = banded.length ? banded.reduce((a, b) => (RANK[b] > RANK[a] ? b : a)) : null;
+  return d.band === strictest ? null : `the decision's band is ${d.band}, but its strictest placement is ${strictest}`;
 }

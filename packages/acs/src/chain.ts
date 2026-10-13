@@ -29,19 +29,27 @@ export function entryHash(entry: EntryFields & { previous_hash?: string | null; 
   return hex(sha256(input));
 }
 
+/** A session's chain, held as its head only: entries go to the caller to persist as they're made. */
 export class Chain {
-  private readonly entries: ContextEntry[] = [];
+  private current: string | null = null;
   get head(): string | null {
-    return this.entries.at(-1)?.entry_hash ?? null;
+    return this.current;
+  }
+  /** The entry that would come next, without adding it: a step's entry is committed only once its
+   *  response is built, so a failed step leaves the chain where the agent last saw it. */
+  next(fields: EntryFields): ContextEntry {
+    const previous_hash = this.current;
+    return { ...fields, previous_hash, entry_hash: entryHash(fields, previous_hash) };
+  }
+  /** Add an entry made by `next`. Refuses one made against a head that has since moved. */
+  commit(entry: ContextEntry): void {
+    if (entry.previous_hash !== this.current) throw new Error("chain entry was made against a different head");
+    this.current = entry.entry_hash;
   }
   append(fields: EntryFields): ContextEntry {
-    const previous_hash = this.head;
-    const entry: ContextEntry = { ...fields, previous_hash, entry_hash: entryHash(fields, previous_hash) };
-    this.entries.push(entry);
+    const entry = this.next(fields);
+    this.commit(entry);
     return entry;
-  }
-  all(): readonly ContextEntry[] {
-    return this.entries;
   }
 }
 

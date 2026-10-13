@@ -55,6 +55,13 @@ const cases: [string, (m: Doc) => void, string][] = [
   ["cap in another currency", (m) => { m.rows[0].authority.cumulativeCaps[0].total.currency = "USD"; }, "money.currency"],
   ["derivation in another currency", (m) => { m.rows[0].authority.valueCeiling.derivation.frictionCost.currency = "SEK"; }, "money.currency"],
   ["unfunded review load", (m) => { m.oversight.fundedReviewerHoursPerWeek = 40; }, "oversight.unfunded"],
+  ["cap window of zero days", (m) => { m.rows[0].authority.cumulativeCaps[0].window = "P0D"; }, "duration.zero"],
+  ["rate cap window of zero seconds", (m) => { m.rows[3].authority.rateCaps[0].window = "PT0S"; }, "duration.zero"],
+  ["two caps in a row share an id", (m) => { const c = m.rows[0].authority.cumulativeCaps; c.push({ ...c[0], window: "P7D" }); }, "cap.duplicate-id"],
+  ["two restrictions in a row share an id", (m) => { const r = { id: "pep", when: { fact: "counterparty", op: "eq", value: "V-1" }, band: "C" }; m.rows[0].authority.restrictions = [r, { ...r, band: "B" }]; }, "restriction.duplicate-id"],
+  ["a restriction's in has no array", (m) => { m.rows[0].authority.restrictions = [{ id: "pep", when: { fact: "counterparty", op: "in", value: "V-1" }, band: "C" }]; }, "condition.in-not-array"],
+  ["two breakers share an id", (m) => { m.circuitBreakers[1].id = m.circuitBreakers[0].id; }, "breaker.duplicate-id"],
+  ["a consent right this version can't enforce", (m) => { m.rows[0].authority.requiredApprovals = [{ role: "ap-owner", within: "PT24H" }]; }, "row.required-approvals-unsupported"],
 ];
 
 describe("each semantic rule trips on its own", () => {

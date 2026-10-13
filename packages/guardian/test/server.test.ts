@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
-import { createGuardian, createGuardianServer, readConfig, shimSignature, Store, verifyEvidence, type Guardian, type SeedOptions } from "../src/index.ts";
+import { createGuardian, createGuardianServer, listCredentials, readConfig, revokeCredential, shimSignature, Store, verifyEvidence, type Guardian, type SeedOptions } from "../src/index.ts";
 import { SoftAuthenticator } from "./authenticator.ts";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
@@ -336,6 +336,24 @@ describe("reject, expire, recover", () => {
   });
 });
 
+describe("a torn tail is repaired before the next append, so it can't glue onto it", () => {
+  const ev = (id: string) => ({ type: "note", id, ts: "2026-10-12T00:00:00Z" });
+  it("a complete last line missing its newline keeps its record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
+    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("a")));
+    new Store(dir).appendEvents([ev("b")]);
+    expect(new Store(dir).events().map((e) => e.id)).toEqual(["a", "b"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  it("a torn partial line, never answered on, is cut off", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
+    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("a")) + "\n" + '{"type":"no');
+    new Store(dir).appendEvents([ev("b")]);
+    expect(new Store(dir).events().map((e) => e.id)).toEqual(["a", "b"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("persistence failure answers with an error, never the decision", () => {
   it("when records can't be written", async () => {
     const { g, port } = await start();
@@ -405,7 +423,7 @@ describe("config", () => {
 
 describe("seeded cases (VAOM v5 Readiness Condition 6)", () => {
   const seeds = join(examples, "incident.seeds.json");
-  const always: SeedOptions = { random: () => 0, delayMs: [0, 0] };
+  const always: SeedOptions = { random: () => 0, delayMs: { mean: 0, max: 0 } };
   const origin = (port: number) => `http://localhost:${port}`;
   /** A real restart ask, then the queue as the page sees it, with the planted case due at once. */
   async function queued(seedOptions: SeedOptions = always, extra: Record<string, unknown> = { seeds }) {
@@ -489,7 +507,7 @@ describe("seeded cases (VAOM v5 Readiness Condition 6)", () => {
   });
 
   it("plants nothing when the draw says no, or when no seed set is configured", async () => {
-    expect((await queued({ random: () => 0.99, delayMs: [0, 0] })).page.json.asks).toHaveLength(1);
+    expect((await queued({ random: () => 0.99, delayMs: { mean: 0, max: 0 } })).page.json.asks).toHaveLength(1);
     const off = await queued(always, {});
     expect(off.page.json.asks).toHaveLength(1);
     expect(off.page.json.seeding).toBeNull();
@@ -513,5 +531,80 @@ describe("seeded cases (VAOM v5 Readiness Condition 6)", () => {
     s.seeds[0].row = "incident.monitor"; s.seeds[0].tool = "mcp__incident__declare";
     writeFileSync(join(dir, "seeds.json"), JSON.stringify(s));
     await expect(start(dir, { seeds: join(dir, "seeds.json") })).rejects.toThrow(/doesn't enable seeding/);
+  });
+});
+
+describe("fixes from review: memory, seeding timing, verify and revocation", () => {
+  it("a decided ask drops its arguments at once, and is forgotten one approval timeout later", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    const t = Date.now();
+    g.approvals.reject(S1, ask.requestId, t);
+    expect(g.approvals.get(S1, ask.requestId)).toMatchObject({ status: "rejected", call: { arguments: null } });
+    expect((await poll(g, port, S1, ask.requestId)).json.status).toBe("rejected");
+    g.approvals.expire(t + 60_000);
+    expect(g.approvals.get(S1, ask.requestId)).toBeUndefined();
+  });
+
+  it("a seed due when no real ask is waiting is skipped, not planted into a quiet queue", async () => {
+    let i = 0;
+    const draws = [0, 0, 0.5]; // plant, pick, then a delay of about 0.7 s
+    const { g, port } = await start(undefined, { seeds: join(examples, "incident.seeds.json") }, { random: () => draws[i++] ?? 0, delayMs: { mean: 1000, max: 5000 } });
+    const call = await session(g, port);
+    const real = await call("steps/toolCallRequest", restart("INC-7"));
+    const t = Date.now();
+    g.approvals.reject(S1, real.requestId, t);
+    g.approvals.expire(t + 5000);
+    expect(g.store.events().filter((e) => e.type === "seed-planted")).toHaveLength(0);
+    expect(g.store.events().find((e) => e.type === "seed-skipped")).toMatchObject({ why: expect.stringMatching(/no real ask/) });
+  });
+
+  it("verify finds a record whose chain entry was cut off the end of the chain", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    await call("steps/toolCallRequest", restart("INC-7"));
+    const chain = join(g.config.dataDir, "chain.jsonl");
+    const lines = readFileSync(chain, "utf8").trimEnd().split("\n");
+    writeFileSync(chain, lines.slice(0, -1).join("\n") + "\n");
+    expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n")).toMatch(/missing from session/);
+  });
+
+  it("verify lists decisions never resolved as open items, not problems", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    await call("steps/toolCallRequest", restart("INC-7"));
+    const r = verifyEvidence(new Store(g.config.dataDir), g.origin);
+    expect(r.open).toHaveLength(1);
+    expect(r.problems).toEqual([]);
+  });
+
+  it("a revoked credential can't approve on a running Guardian, and verify flags anything it signed afterwards", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const auth = await enroll(g, port, ["sre-lead"]);
+    const [cred] = listCredentials(g.store);
+    revokeCredential(g.store, cred!.id, Date.now());
+    expect(() => revokeCredential(g.store, cred!.id, Date.now())).toThrow(/already revoked/);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    expect((await approveWith(port, auth, S1, ask.requestId)).status).toBe(403);
+    expect(listCredentials(g.store)[0]).toMatchObject({ revoked: expect.any(String) });
+  });
+
+  it("verify flags an approval made after its credential's revocation, and one whose decision has no record", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    const auth = await enroll(g, port, ["sre-lead"]);
+    expect((await approveWith(port, auth, S1, ask.requestId)).status).toBe(200);
+    const events = join(g.config.dataDir, "events.jsonl");
+    const lines = readFileSync(events, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+    const approval = lines.find((e) => e.type === "approval");
+    const revocation = { type: "credential-revoked", id: "rv", ts: "2026-10-01T00:00:00Z", credential_id: approval.credential_id };
+    const reordered = [...lines.filter((e) => e !== approval), revocation, approval, { ...approval, id: "ghost", decision: "no-such-decision" }];
+    writeFileSync(events, reordered.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const problems = verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n");
+    expect(problems).toMatch(/after it was revoked/);
+    expect(problems).toMatch(/has no record/);
   });
 });

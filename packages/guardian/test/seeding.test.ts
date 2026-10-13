@@ -8,14 +8,15 @@ const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples
 const load = (f: string) => JSON.parse(readFileSync(join(examples, f), "utf8"));
 const scoring = ["remediation-gate", "incident-detection"].map((s) => load(`${s}.scoring.json`));
 
-function seeder(seedingOn: boolean, random = () => 0) {
+function seederOptions(seedingOn = true) {
   const m = load("incident.matrix.json");
   if (!seedingOn) m.rows.find((r: { id: string }) => r.id === "remediation.restart").oversight.seeding = { enabled: false };
   const r = compilePolicy(m, load("incident.binding.json"), scoring);
   if (!r.ok) throw new Error(JSON.stringify(r.findings));
   const ledger = new CapLedger(); ledger.load([]);
-  return new Seeder({ policy: r.policy, ledger, contexts: new ContextRegistry(r.policy), set: load("incident.seeds.json") as SeedSet, random, delayMs: [0, 0] });
+  return { policy: r.policy, ledger, contexts: new ContextRegistry(r.policy), set: load("incident.seeds.json") as SeedSet };
 }
+const seeder = (seedingOn: boolean, random = () => 0) => new Seeder({ ...seederOptions(seedingOn), random, delayMs: { mean: 0, max: 0 } });
 const real = { session: "s", call: { arguments: { incident_id: "INC-7" } }, record: { request: { agent: { id: "a" } }, decision: { placements: [{ row: "remediation.restart" }] } } as unknown as DecisionRecord };
 
 describe("the seeder", () => {
@@ -30,9 +31,15 @@ describe("the seeder", () => {
   });
   it("plants the least-used seed next, so a reviewer doesn't meet one case twice before the others", () => {
     const s = seeder(true);
-    const ids = [1, 2, 3, 4, 5, 6].map(() => s.consider(real, 0)!.seed.id);
-    expect(new Set(ids.slice(0, 3)).size).toBe(3);
-    expect(new Set(ids.slice(3)).size).toBe(3);
+    const ids = [1, 2, 3, 4].map(() => s.consider(real, 0)!.seed.id);
+    expect(new Set(ids.slice(0, 2)).size).toBe(2);
+    expect(new Set(ids.slice(2)).size).toBe(2);
+  });
+  it("delays a seed by minutes, exponentially, capped at an hour", () => {
+    const at = (u: number) => new Seeder({ ...seederOptions(), random: (() => { let first = true; return () => (first ? ((first = false), 0) : u); })() }).consider(real, 0)!.dueAt;
+    expect(at(0)).toBe(0);
+    expect(at(1 - Math.exp(-1))).toBe(600_000); // the mean
+    expect(at(0.999999)).toBe(3_600_000); // capped
   });
   it("copies only the named arguments from the real call", () => {
     const p = seeder(true).consider({ ...real, call: { arguments: { incident_id: "INC-9", service: "web" } } }, 0)!;

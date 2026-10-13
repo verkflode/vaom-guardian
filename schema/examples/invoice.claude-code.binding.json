@@ -2,7 +2,7 @@
   "$schema": "../vaom-binding.schema.json",
   "format": "vaom.binding/0.1",
   "id": "example.ap.invoice.claude-code",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "Invoice matrix on Claude Code, via a placeholder ERP MCP server",
   "host": { "id": "claude-code", "toolSet": "claude-code-2026.09 + placeholder erp MCP server 1.x" },
   "matrix": { "id": "example.ap.invoice", "versions": ">=1.0.0 <2.0.0" },
@@ -35,7 +35,7 @@
         "arg": "/invoices",
         "maxItems": 50,
         "facts": {
-          "amount": { "amount": { "arg": "/amount" }, "currency": { "const": "EUR" } },
+          "amount": { "amount": { "arg": "/amount" }, "currency": { "arg": "/currency" } },
           "counterparty": { "arg": "/vendor_id" },
           "task": { "arg": "/invoice_id" },
           "po_reference": { "arg": "/po_number" }

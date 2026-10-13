@@ -6,6 +6,9 @@
 // - A seed never becomes a decision record and never reaches the ACS endpoint, so nothing can execute
 //   it whatever the reviewer does. Its outcome is a seed event in the Guardian's store, nothing else.
 // - Reviewers are told seeding exists and at what rate (the page says so); never which asks are seeds.
+// - Timing gives as little away as it can: a seed follows a real ask after a random delay of minutes
+//   (exponential, so most come soon and some much later), and is planted only while a real ask is still
+//   waiting, so a lone new card in an otherwise quiet queue is never a seed.
 import { randomInt, randomUUID } from "node:crypto";
 import { preview, type CapLedger, type ContextRegistry, type DecisionRecord, type Policy } from "@verkflode/vaom-guardian-core";
 
@@ -24,8 +27,9 @@ export interface SeederOptions {
   plantedBefore?: ReadonlyMap<string, number>;
   /** Uniform in [0, 1). Injectable for tests; defaults to crypto randomness. */
   random?: () => number;
-  /** Delay between the real ask and its seed, uniform in [min, max] ms, so seeds don't arrive in lockstep. */
-  delayMs?: [number, number];
+  /** Delay between the real ask and its seed: exponential with this mean, capped at max (ms). Default a
+   *  10-minute mean, capped at an hour. */
+  delayMs?: { mean: number; max: number };
 }
 
 export class Seeder {
@@ -63,11 +67,12 @@ export class Seeder {
     const pool = candidates.filter((s) => (this.used.get(s.id) ?? 0) === least);
     const seed = pool[Math.floor(this.random() * pool.length)]!;
     this.used.set(seed.id, least + 1);
-    const [min, max] = this.o.delayMs ?? [5_000, 60_000];
+    const { mean, max } = this.o.delayMs ?? { mean: 600_000, max: 3_600_000 };
+    const delay = Math.min(max, Math.floor(-mean * Math.log(1 - this.random())));
     const args = { ...seed.arguments };
     const from = (real.call.arguments ?? {}) as Record<string, unknown>;
     for (const k of seed.copy ?? []) if (k in from) args[k] = from[k];
-    return { seed, dueAt: now + min + Math.floor(this.random() * (max - min + 1)), session: real.session, agent: real.record.request.agent, args };
+    return { seed, dueAt: now + delay, session: real.session, agent: real.record.request.agent, args };
   }
 
   /** Place a planned seed as of now. null when a real call like it wouldn't be asked (it would be allowed, refused or unplaceable). */

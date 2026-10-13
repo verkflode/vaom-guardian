@@ -110,16 +110,22 @@ describe("the audit chain (§8.2)", () => {
     const manual2 = createHash("sha256").update(Buffer.concat([Buffer.from(canonicalize({ entry_id: "e2", step_id: "r2", step_type: "toolCallRequest" }), "utf8"), Buffer.from(e1.entry_hash, "hex")])).digest("hex");
     expect(e2.entry_hash).toBe(manual2);
     expect(c.head).toBe(e2.entry_hash);
-    expect(verifyChain(c.all())).toBe(true);
+    expect(verifyChain([e1, e2])).toBe(true);
   });
   it("detects a dropped, reordered or edited entry", () => {
     const c = new Chain();
-    for (let i = 0; i < 4; i++) c.append({ entry_id: `e${i}`, step_id: `r${i}`, step_type: "toolCallRequest" });
-    const all = [...c.all()];
+    const all = [0, 1, 2, 3].map((i) => c.append({ entry_id: `e${i}`, step_id: `r${i}`, step_type: "toolCallRequest" }));
     expect(verifyChain([all[0]!, all[2]!, all[3]!])).toBe(false);
     expect(verifyChain([all[1]!, all[0]!, all[2]!, all[3]!])).toBe(false);
     expect(verifyChain([all[0]!, { ...all[1]!, step_type: "sessionEnd" }, all[2]!, all[3]!])).toBe(false);
     expect(entryHash(all[1]!, all[0]!.entry_hash)).toBe(all[1]!.entry_hash);
+  });
+  it("an entry made with next() isn't in the chain until committed, and can't be committed onto a moved head", () => {
+    const c = new Chain();
+    const tentative = c.next({ entry_id: "e1", step_id: "r1", step_type: "toolCallRequest" });
+    expect(c.head).toBeNull();
+    c.append({ entry_id: "e2", step_id: "r2", step_type: "turnStart" });
+    expect(() => c.commit(tentative)).toThrow(/different head/);
   });
   it("request_hash is the SHA-256 of the JCS-canonical params", () => {
     expect(requestHash({ b: 1, a: 2 })).toBe(createHash("sha256").update('{"a":2,"b":1}', "utf8").digest("hex"));

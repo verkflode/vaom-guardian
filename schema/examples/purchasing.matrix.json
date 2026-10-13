@@ -2,11 +2,11 @@
   "$schema": "../vaom-matrix-0.2.schema.json",
   "format": "vaom.matrix/0.2",
   "id": "example.procurement.mro",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Delegated purchasing (VAOM v5 worked example 7E)",
   "description": "A manufacturer delegates replenishment of maintenance, repair and operating supplies under a monthly mandate signed by the procurement manager: three framework suppliers, approved catalogue categories, EUR 2,500 per order, EUR 20,000 a month. Figures the whitepaper states are used as stated (those limits, the 0.93 threshold, twelve or so Band B purchases a week); the lower threshold, calibration record, catalogue category names and other oversight figures are illustrative. The monthly ceiling is modelled as a rolling 30-day window, where the paper's mandate runs to month end.",
   "effective": { "from": "2026-10-01T00:00:00Z" },
-  "approval": { "role": "procurement-manager", "date": "2026-10-01", "ref": "placeholder://approvals/procurement-matrix-1.0.0" },
+  "approval": { "role": "procurement-manager", "date": "2026-10-01", "ref": "placeholder://approvals/procurement-matrix-1.1.0" },
 
   "roles": {
     "procurement-manager": { "title": "Procurement manager" },
@@ -55,7 +55,7 @@
         "kind": "delegable",
         "routing": { "high": "A", "medium": "B", "low": "C" },
         "confidence": {
-          "scoringPolicy": { "id": "reorder-gate", "version": "1.3" },
+          "scoringPolicy": { "id": "reorder-gate", "version": "1.4" },
           "thresholds": { "high": 0.93, "medium": 0.7 },
           "calibration": { "errorTarget": 0.02, "confidenceLevel": 0.95, "sampleSize": 600, "sampleDate": "2026-09-15", "method": "learn-then-test" },
           "verificationRequired": true

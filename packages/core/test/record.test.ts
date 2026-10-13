@@ -63,7 +63,7 @@ describe("building a record", () => {
   });
 
   it("gives each batch item its own facts", () => {
-    const call: Call = { tool: "mcp__erp__approve_invoices", arguments: { invoices: [{ invoice_id: "A", vendor_id: "V-1", amount: "10", po_number: "PO-A" }, { invoice_id: "B", vendor_id: "V-2", amount: "20", po_number: "PO-B" }] } };
+    const call: Call = { tool: "mcp__erp__approve_invoices", arguments: { invoices: [{ invoice_id: "A", vendor_id: "V-1", amount: "10", currency: "EUR", po_number: "PO-A" }, { invoice_id: "B", vendor_id: "V-2", amount: "20", currency: "EUR", po_number: "PO-B" }] } };
     const r = buildRecord(input(call));
     expect(r.decision.placements.map((p) => p.facts.task)).toEqual([{ value: "A" }, { value: "B" }]);
     expect(checkRecord(r)).toEqual([]);
@@ -167,5 +167,23 @@ describe("the schema holds the same rules on its own", () => {
     expect(checkRecord({ ...rec, resolution: { ts: "2026-10-02T10:00:01Z", result: "executed" } }).length).toBeGreaterThan(0);
     const un = buildRecord(input({ tool: "mcp__erp__pay_invoice", arguments: {} }));
     expect(checkRecord({ ...un, resolution: { ts: "2026-10-02T10:00:01Z", result: "executed" } }).length).toBeGreaterThan(0);
+  });
+});
+
+describe("a record's decision must be the one its placements combine to", () => {
+  const good = () => buildRecord(input(approve("3200")));
+  it("the outcome follows from the band (schema)", () => {
+    const r = good(); (r.decision as { band: string }).band = "B";
+    expect(checkRecord(r).map((f) => f.rule)).toContain("schema");
+    const q = good(); (q.decision as { outcome: string }).outcome = "review";
+    expect(checkRecord(q).map((f) => f.rule)).toContain("schema");
+  });
+  it("the band is the strictest placement's: an allow over a Band B placement is refused", () => {
+    const r = good(); (r.decision.placements[0] as { band: string }).band = "B";
+    expect(checkRecord(r).map((f) => f.rule)).toEqual(["decision.combination"]);
+  });
+  it("a refusing placement makes the decision a refusal", () => {
+    const r = good(); Object.assign(r.decision.placements[0]!, { outcome: "refuse", band: "non-delegable" });
+    expect(checkRecord(r).map((f) => f.rule)).toEqual(["decision.combination"]);
   });
 });

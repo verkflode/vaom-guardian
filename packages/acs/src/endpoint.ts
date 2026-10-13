@@ -15,7 +15,10 @@
 import { decide, resolveRecord, type CapLedger, type ContextRegistry, type ContextSpec, type DecisionRecord, type LiveContext, type Policy, type Resolution } from "@verkflode/vaom-guardian-core";
 import { Chain, requestHash, type ContextEntry } from "./chain.ts";
 import { AcsError, ERR } from "./errors.ts";
-import { validateRequestEnvelope, validateResponseEnvelope, validateSessionStart, validateSubagentStart, validateToolCallRequest, validateToolCallResult, type Validator } from "./generated/validators.js";
+import {
+  validateAgentResponse, validateAgentTrigger, validatePostCompact, validatePreCompact, validateRequestEnvelope, validateResponseEnvelope, validateSessionEnd, validateSessionStart,
+  validateSubagentStart, validateSubagentStop, validateToolCallRequest, validateToolCallResult, validateTurnEnd, validateTurnStart, validateUserMessage, type Validator,
+} from "./generated/validators.js";
 import { negotiate, type GuardianConfig } from "./handshake.ts";
 import { sessionKey } from "./hkdf.ts";
 import { ReplayGuard } from "./replay.ts";
@@ -25,8 +28,13 @@ import { acceptsVersion } from "./version.ts";
 
 type Json = any;
 
-/** Steps that report what happened and carry no action of their own. */
+/** Steps that report what happened and carry no action of their own. Each is checked against its schema
+ *  before it's chained: an entry commits to a payload, so the payload must be the step it claims to be. */
 export const OBSERVED_STEPS = ["steps/turnStart", "steps/turnEnd", "steps/userMessage", "steps/agentTrigger", "steps/agentResponse", "steps/preCompact", "steps/postCompact", "steps/subagentStop"] as const;
+const OBSERVED_VALIDATORS: Record<(typeof OBSERVED_STEPS)[number], Validator> = {
+  "steps/turnStart": validateTurnStart, "steps/turnEnd": validateTurnEnd, "steps/userMessage": validateUserMessage, "steps/agentTrigger": validateAgentTrigger,
+  "steps/agentResponse": validateAgentResponse, "steps/preCompact": validatePreCompact, "steps/postCompact": validatePostCompact, "steps/subagentStop": validateSubagentStop,
+};
 
 export interface EndpointConfig extends GuardianConfig {
   /** Pre-shared secret the per-session HMAC keys are derived from (HKDF, ACS §10.2). */
@@ -42,6 +50,9 @@ export interface EndpointConfig extends GuardianConfig {
   activationFor(input: { agentId: string; sessionId: string; payload: Json }): Omit<ContextSpec, "id" | "session" | "agent"> | null;
   /** Further live contexts for a session, e.g. lease observation contexts. */
   extraContexts?(sessionId: string, now: number): readonly LiveContext[];
+  /** When this Guardian started (ms). Requests signed before it are refused: the replay guard's memory
+   *  doesn't survive a restart. */
+  startedAt?: number;
 }
 
 export interface EndpointDeps {
@@ -77,8 +88,13 @@ export interface Spawn {
   reason: string;
   context?: string;
   why?: string;
+  /** What the agent declared about the sub-agent's intent. Recorded for the audit; authority comes from
+   *  the matrix's patterns, and a derived context only ever narrows. */
+  intent_derivation?: string;
 }
 
+// An ended session stays as a small tombstone (its chain is a head, its replay ids are dropped), so its id
+// can't negotiate again.
 interface Session {
   agentId: string;
   version: string;
@@ -103,12 +119,13 @@ export class AcsEndpoint {
     if (cfg.ikm.length < 32) throw new Error("the ACS pre-shared secret must be at least 32 bytes");
     this.cfg = cfg;
     this.deps = deps;
-    this.replay = new ReplayGuard(cfg.skewWindowMs);
+    this.replay = new ReplayGuard(cfg.skewWindowMs, cfg.startedAt);
   }
 
   handle(raw: string | unknown, now: number): Handled {
     const out: Handled = { response: null, records: [], entries: [], incidents: [], spawns: [] };
     let id: string | number | null = null;
+    let requestId: string | undefined;
     try {
       let env: Json;
       if (typeof raw === "string") {
@@ -119,6 +136,7 @@ export class AcsEndpoint {
       if (!validateRequestEnvelope(env)) throw new AcsError(ERR.INVALID_REQUEST, "request fails the ACS envelope schema", { errors: brief(validateRequestEnvelope) });
 
       const p = env.params;
+      requestId = p.request_id;
       if (env.method === "system/ping") {
         out.response = { jsonrpc: "2.0", id, result: { type: "final", acs_version: p.acs_version, request_id: p.request_id, decision: "allow" } };
         return out;
@@ -146,13 +164,15 @@ export class AcsEndpoint {
       const step = STEPS[env.method as string];
       const observed = (OBSERVED_STEPS as readonly string[]).includes(env.method);
       if (!step && !observed) throw new AcsError(ERR.METHOD_NOT_FOUND, `${env.method} is not evaluated by this Guardian`);
-      if (step?.validate && !step.validate(p.payload)) throw new AcsError(ERR.INVALID_PARAMS, `${env.method} payload fails its schema`, { errors: brief(step.validate) });
+      const validate = step ? step.validate : OBSERVED_VALIDATORS[env.method as (typeof OBSERVED_STEPS)[number]];
+      if (validate && !validate(p.payload)) throw new AcsError(ERR.INVALID_PARAMS, `${env.method} payload fails its schema`, { errors: brief(validate) });
 
-      // Chain cross-check (§8.6): the agent's view of the head before this step must match ours.
+      // Chain cross-check (§8.6): the agent's view of the head before this step must match ours. The step's
+      // entry is committed only once its response is built: a step that fails leaves no entry, and the
+      // agent's last seen head stays right.
       const claimed: string | undefined = p.metadata.session_state?.chain_hash;
       const mismatch = claimed !== undefined && claimed !== (s.chain.head ?? "");
-      const entry = s.chain.append({ entry_id: this.deps.newId(), step_id: p.request_id, step_type: (env.method as string).slice("steps/".length), request_hash: requestHash(p), timestamp: p.timestamp });
-      out.entries.push(entry);
+      const entry = s.chain.next({ entry_id: this.deps.newId(), step_id: p.request_id, step_type: (env.method as string).slice("steps/".length), request_hash: requestHash(p), timestamp: p.timestamp });
       const base = { type: "final", acs_version: s.version, request_id: p.request_id, chain_hash: entry.entry_hash };
 
       let result: Json;
@@ -162,16 +182,21 @@ export class AcsEndpoint {
 
       out.response = sign({ jsonrpc: "2.0", id, result }, key, this.cfg.keyId);
       if (!validateResponseEnvelope(out.response)) throw new AcsError(ERR.INTERNAL, "built response fails the ACS envelope schema", { errors: brief(validateResponseEnvelope) });
+      s.chain.commit(entry);
+      out.entries.push(entry);
+      if (env.method === "steps/sessionEnd") this.replay.forget(sid);
       return out;
     } catch (e) {
       const err = e instanceof AcsError ? e : new AcsError(ERR.INTERNAL, "decision failure");
-      // Nothing from a failed request is kept: the response is an error, so no decision went out.
+      // Nothing from a failed request is kept: the response is an error, so no decision went out. A decision
+      // made in this request is released whether or not it was resolved here (a refusal is resolved at
+      // once); a resolution of an earlier call isn't undone, since that call did run.
       for (const r of out.records) {
-        if (r.resolution) continue;
+        if (r.request.wire?.request_id !== requestId && r.resolution) continue;
         this.deps.ledger.release(r.id);
         if (r.request.wire?.request_id) this.pending.delete(`${r.request.session.id} ${r.request.wire.request_id}`);
       }
-      return { response: { jsonrpc: "2.0", id, error: { code: err.code, message: err.message, data: err.data } }, records: [], entries: out.entries, incidents: out.incidents, spawns: out.spawns };
+      return { response: { jsonrpc: "2.0", id, error: { code: err.code, message: err.message, data: err.data } }, records: [], entries: [], incidents: out.incidents, spawns: out.spawns };
     }
   }
 
@@ -243,13 +268,17 @@ const STEPS: Record<string, Step> = {
   },
 
   "steps/sessionEnd": {
+    validate: validateSessionEnd,
     run(i) {
-      const { deps } = inside(this);
+      const { deps, pending } = inside(this);
       // A session's authority ends with it: its root context, and the context a sub-agent session was
       // derived with at subagentStart, which this session never opened itself.
       for (const c of deps.contexts.liveFor(i.sid, i.now)) deps.contexts.close(c.id);
       if (i.s.context) deps.contexts.close(i.s.context);
       i.s.ended = true;
+      // Allowed calls whose result never came stay reserved in the ledger (they may have run); only the
+      // memory goes. Reviews and escalations stay until the Guardian resolves them, within their timeout.
+      for (const [k, p] of pending) if (k.startsWith(`${i.sid} `) && p.record.decision.outcome === "allow") pending.delete(k);
       return { decision: "allow" };
     },
   },
@@ -280,7 +309,7 @@ const STEPS: Record<string, Step> = {
         i.out.records[i.out.records.length - 1] = resolved;
       }
       return toResult({ outcome: o, band: record.decision.band, ...(record.decision.approver_role ? { approverRole: record.decision.approver_role } : {}), placements: record.decision.placements, reasons: record.decision.reasons, policy: record.policy }, {
-        requestId: i.p.request_id, approvalTimeoutSeconds: cfg.approvalTimeoutSeconds, deferTimeoutMs: cfg.deferTimeoutMs, evaluatorVersion: cfg.evaluatorVersion,
+        requestId: i.p.request_id, acsVersion: i.s.version, approvalTimeoutSeconds: cfg.approvalTimeoutSeconds, deferTimeoutMs: cfg.deferTimeoutMs, evaluatorVersion: cfg.evaluatorVersion,
       });
     },
   },
@@ -318,11 +347,13 @@ const STEPS: Record<string, Step> = {
     run(i) {
       const { deps } = inside(this);
       const pl = i.p.payload;
-      const parent = deps.contexts.liveFor(pl.parent_session_id, i.now)[0];
+      // The session's own context: the one it opened at sessionStart, or, for a sub-agent's session, the one
+      // it was derived with. Never another live context that happens to share the session (a lease's).
+      const parent = i.s.context ? deps.contexts.live(i.s.context, i.now) : deps.contexts.liveFor(i.sid, i.now).find((c) => c.subagentType !== undefined);
       const type: string | undefined = pl.subagent_descriptor?.agent_name;
       const agentId: string = pl.subagent_descriptor?.agent_id ?? `${i.s.agentId}/${type ?? "unknown"}`;
       const answer = (decision: "allow" | "deny", reason: string, extra: { context?: string; why?: string; policy_data?: Json; reasoning?: string } = {}) => {
-        i.out.spawns.push({ session: i.sid, subagent_session: String(pl.subagent_session_id), agent: agentId, ...(type ? { subagent_type: type } : {}), decision, reason, ...(extra.context ? { context: extra.context } : {}), ...(extra.why ? { why: extra.why } : {}) });
+        i.out.spawns.push({ session: i.sid, subagent_session: String(pl.subagent_session_id), agent: agentId, ...(type ? { subagent_type: type } : {}), decision, reason, ...(extra.context ? { context: extra.context } : {}), ...(extra.why ? { why: extra.why } : {}), ...(typeof pl.intent_derivation === "string" ? { intent_derivation: pl.intent_derivation } : {}) });
         return { decision, reason_codes: [reason], ...(extra.reasoning ? { reasoning: extra.reasoning } : {}), ...(extra.policy_data ? { policy_data: extra.policy_data } : {}) };
       };
       if (pl.parent_session_id !== i.sid) return answer("deny", "parent_session_mismatch", { reasoning: "A sub-agent can only be started from its own parent session." });

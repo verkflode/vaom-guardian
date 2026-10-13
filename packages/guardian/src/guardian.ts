@@ -125,6 +125,7 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
     approvalTimeoutSeconds: timeoutMs / 1000,
     deferTimeoutMs: 1000,
     evaluatorVersion: VERSION,
+    startedAt: now,
     activationFor: ({ agentId }) => {
       const a = config.activation?.[agentId];
       return a ? { rows: [...a.rows], ...(a.scopes ? { scopes: [...a.scopes] } : {}), ...(a.task ? { task: a.task } : {}) } : null;

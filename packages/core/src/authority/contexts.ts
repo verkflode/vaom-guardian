@@ -59,7 +59,10 @@ export class ContextRegistry {
   /** Open a root context at activation. Throws on an invalid spec: nothing is opened. */
   open(spec: ContextSpec, now: number): Context {
     this.checkSpec(spec);
-    const depth = Math.max(0, ...spec.rows.map((r) => this.policy.rowById.get(r)?.authority?.chain?.maxDepth ?? 0));
+    // The strictest chain among the rows: a row that allows one level of sub-agents isn't stretched to
+    // another row's five by sharing a context with it.
+    const chains = this.chains(spec.rows);
+    const depth = chains.length ? Math.min(...chains.map((c) => c.maxDepth as number)) : 0;
     const ctx: Context = { ...spec, openedAt: now, expiresAt: now + this.lifetimeMs(spec.rows), depthLeft: depth, state: "open" };
     this.byId.set(spec.id, ctx);
     return ctx;
@@ -79,14 +82,23 @@ export class ContextRegistry {
     if (extra.length) return { ok: false, outcome: "refuse", reason: `rows ${extra.join(", ")} are not in the parent context` };
     if (parent.depthLeft < 1) return { ok: false, outcome: "refuse", reason: "chain depth exhausted: an authority breach" };
 
-    // The parent row's chain limits and allowed sub-agent patterns govern the spawn.
-    const spawnRow = parent.rows.map((r) => this.policy.rowById.get(r)).find((row) => row?.authority?.chain);
-    const chain = spawnRow?.authority?.chain;
-    if (!chain) return { ok: false, outcome: "escalate", reason: "no row in the parent context defines sub-agent patterns" };
+    // Every chain in the parent context governs the spawn, and the strictest limit of each kind applies:
+    // the type must be allowed by every row that defines sub-agent patterns, with the capabilities they
+    // all allow.
+    const chains = this.chains(parent.rows);
+    if (chains.length === 0) return { ok: false, outcome: "escalate", reason: "no row in the parent context defines sub-agent patterns" };
+    const maxFanOut = Math.min(...chains.map((c) => c.maxFanOut as number));
     const children = [...this.byId.values()].filter((c) => c.parent === parentId && c.state === "open" && c.expiresAt > now);
-    if (children.length >= chain.maxFanOut) return { ok: false, outcome: "refuse", reason: `fan-out ${chain.maxFanOut} reached: an authority breach` };
-    const pattern = (chain.allowedSubagents ?? []).find((p: { type: string }) => p.type === child.subagentType);
-    if (!pattern) return { ok: false, outcome: "escalate", reason: `sub-agent type ${child.subagentType} is outside the allowed patterns` };
+    if (children.length >= maxFanOut) return { ok: false, outcome: "refuse", reason: `fan-out ${maxFanOut} reached: an authority breach` };
+    const patterns = chains.map((c) => (c.allowedSubagents ?? []).find((p: { type: string }) => p.type === child.subagentType));
+    if (patterns.some((p) => !p)) return { ok: false, outcome: "escalate", reason: `sub-agent type ${child.subagentType} is outside the allowed patterns` };
+    const counts = patterns.map((p) => p.maxCount).filter((n): n is number => n !== undefined);
+    const lifetimes = patterns.map((p) => p.maxLifetime).filter((d): d is string => d !== undefined);
+    const pattern = {
+      capabilities: (patterns[0].capabilities as string[]).filter((cap) => patterns.every((p) => (p.capabilities as string[]).includes(cap))),
+      ...(counts.length ? { maxCount: Math.min(...counts) } : {}),
+      ...(lifetimes.length ? { maxLifetime: lifetimes.reduce((a, b) => ((durationSeconds(a) ?? 0) <= (durationSeconds(b) ?? 0) ? a : b)) } : {}),
+    } as { capabilities: string[]; maxCount?: number; maxLifetime?: string };
     // The child's scope: what it asks for (default: the whole pattern), within the parent's reach.
     const parentReach = new Set(this.reach(parent));
     const scopes = child.scopes ?? [...pattern.capabilities].filter((c: string) => parentReach.has(c));
@@ -151,6 +163,11 @@ export class ContextRegistry {
       if (c.rows.includes(row.id) || (a.kind === "preparatory" && (a.serves as string[]).some((s) => c.rows.includes(s)))) for (const cap of row.capabilities) out.add(cap);
     }
     return [...out];
+  }
+
+  /** The sub-agent chains the given rows define. */
+  private chains(rows: readonly string[]): any[] {
+    return rows.map((r) => this.policy.rowById.get(r)?.authority?.chain).filter(Boolean);
   }
 
   private lifetimeMs(rows: string[]): number {

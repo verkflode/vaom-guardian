@@ -9,8 +9,12 @@ export class ReplayGuard {
   private ids = new Map<string, Set<string>>();
   private nonces = new Map<string, Map<string, number>>();
   readonly skewMs: number;
-  constructor(skewMs: number) {
+  /** Nothing signed before this is accepted: request ids from before a restart aren't remembered, so a
+   *  request timestamped before the Guardian started could otherwise be replayed within the skew window. */
+  readonly notBefore: number;
+  constructor(skewMs: number, notBefore = Number.NEGATIVE_INFINITY) {
     this.skewMs = skewMs;
+    this.notBefore = notBefore;
   }
 
   check(session: string, requestId: string, timestamp: string, now: number, nonce?: string): void {
@@ -18,6 +22,7 @@ export class ReplayGuard {
     const t = Date.parse(timestamp);
     if (Number.isNaN(t) || !/\d{4}-\d{2}-\d{2}T/.test(timestamp)) throw new AcsError(ERR.INVALID_PARAMS, "timestamp is not ISO 8601");
     if (Math.abs(now - t) > this.skewMs) throw new AcsError(ERR.TIMESTAMP_OUT_OF_WINDOW, "timestamp outside the skew window", { skew_window_ms: this.skewMs });
+    if (t < this.notBefore) throw new AcsError(ERR.TIMESTAMP_OUT_OF_WINDOW, "timestamp is from before this Guardian started; sign the request again", { skew_window_ms: this.skewMs });
     const ids = this.ids.get(session) ?? new Set<string>();
     if (ids.has(requestId)) throw new AcsError(ERR.REPLAY_DETECTED, "request_id already used in this session");
     if (nonce !== undefined) {

@@ -99,6 +99,7 @@ export class LeaseRegistry {
   reattest(id: string, approvals: { role: string; record: string }[], now: number): Result<Lease> {
     const l = this.byId.get(id);
     if (!l || l.status === "revoked") return { ok: false, reason: "no such lease, or revoked" };
+    if (now >= l.expiresAt) return { ok: false, reason: "lease has run out; grant a new one" };
     const acc = this.policy.rowById.get(l.row).accountability;
     const required: [string, string | undefined][] = acc.form === "single" ? [[acc.role, acc.deputy]] : acc.owners.map((o: { role: string; deputy?: string }) => [o.role, o.deputy]);
     const signed = new Set(approvals.filter((a) => a.record).map((a) => a.role));

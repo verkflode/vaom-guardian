@@ -21,6 +21,8 @@ export function toCall(payload: { tool: { name: string }; arguments: Record<stri
 
 export interface ResultOptions {
   requestId: string;
+  /** The ACS version the session negotiated. */
+  acsVersion: string;
   approvalTimeoutSeconds: number;
   deferTimeoutMs: number;
   evaluatorVersion: string;
@@ -41,7 +43,7 @@ export function toResult(d: ResultInput, o: ResultOptions): Json {
   const rows = [...new Set(d.placements.map((p) => p.row))];
   const base: Json = {
     type: "final",
-    acs_version: "0.1.0",
+    acs_version: o.acsVersion,
     request_id: o.requestId,
     reason_codes: codes,
     policy_references: [

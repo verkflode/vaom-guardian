@@ -57,7 +57,7 @@ describe("the worked example: invoice of EUR 3,200", () => {
     expect(d.outcome).toBe("allow");
     expect(d.band).toBe("A");
     expect(d.placements[0]!.row).toBe("invoice.approve");
-    expect(d.policy).toEqual({ matrix: { id: "example.ap.invoice", version: "1.1.0" }, binding: { id: "example.ap.invoice.claude-code", version: "0.3.0" }, scoring: [{ id: "invoice-standard", version: "3.2" }] });
+    expect(d.policy).toEqual({ matrix: { id: "example.ap.invoice", version: "1.1.0" }, binding: { id: "example.ap.invoice.claude-code", version: "0.4.0" }, scoring: [{ id: "invoice-standard", version: "3.2" }] });
     expect(d.placements[0]!.score).toEqual({ policy: { id: "invoice-standard", version: "3.2" }, value: 1, level: "high", verified: true, dimensions: { dataCompleteness: { score: 1 }, ruleMatch: { score: 1 }, anomaly: { score: 1 } } });
   });
 
@@ -232,7 +232,7 @@ describe("limits only narrow", () => {
 describe("batches can't slip under a ceiling or a cap", () => {
   const p = compile();
   const batch = (items: unknown[]) => ({ tool: "mcp__erp__approve_invoices", arguments: { invoices: items } });
-  const inv = (id: string, amount: string, vendor = "V-7") => ({ invoice_id: id, vendor_id: vendor, amount, po_number: `PO-${id}` });
+  const inv = (id: string, amount: string, vendor = "V-7", currency = "EUR") => ({ invoice_id: id, vendor_id: vendor, amount, currency, po_number: `PO-${id}` });
 
   it("three invoices of 2,000 to one vendor: the third breaches the daily cap", () => {
     const d = evaluate(p, batch([inv("A", "2000"), inv("B", "2000"), inv("C", "2000")]), ctx());
@@ -245,6 +245,11 @@ describe("batches can't slip under a ceiling or a cap", () => {
   });
   it("one item over the ceiling makes the whole call review", () => {
     expect(evaluate(p, batch([inv("A", "100", "V-1"), inv("B", "7000", "V-2")]), ctx()).band).toBe("B");
+  });
+  it("each item's currency is read from the item: a KWD invoice in an EUR batch isn't read as EUR", () => {
+    const d = evaluate(p, batch([inv("A", "100", "V-1"), inv("B", "100", "V-2", "KWD")]), ctx());
+    expect(d.outcome).toBe("unplaceable");
+    expect(d.reasons.map((r) => r.code)).toContain("currency.mismatch");
   });
   it("an empty or oversized batch is unplaceable", () => {
     expect(evaluate(p, batch([]), ctx()).outcome).toBe("unplaceable");

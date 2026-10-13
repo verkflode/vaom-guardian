@@ -438,6 +438,15 @@ describe("the CLI, as Claude Code runs it", () => {
     expect(res.code).toBe(2);
   });
 
+  it("blocks with exit 2 and an explicit deny when the input names no hook event", async () => {
+    const r = await guardian();
+    for (const input of [{ ...pre("Bash", { command: "x" }), hook_event_name: undefined }, { ...pre("Bash", { command: "x" }), hook_event_name: "" }, { ...pre("Bash", { command: "x" }), hook_event_name: 5 }]) {
+      const res = await run(["hook", "--guardian", r.config, "--agent", AGENT, "--state", join(r.dir, "cli-state")], JSON.stringify(input));
+      expect(res.code).toBe(2);
+      expect(decision(JSON.parse(res.stdout))).toBe("deny");
+    }
+  });
+
   it("prints settings that route every tool through the shim and disable bypass mode", async () => {
     const r = await guardian();
     const res = await run(["settings", "--guardian", r.config, "--agent", AGENT], "");
@@ -445,5 +454,20 @@ describe("the CLI, as Claude Code runs it", () => {
     expect(s.permissions.disableBypassPermissionsMode).toBe("disable");
     expect(s.hooks.PreToolUse[0]).toMatchObject({ matcher: "*", hooks: [{ type: "command", timeout: 600 }] });
     expect(s.hooks.PreToolUse[0].hooks[0].command).toContain(" hook --guardian ");
+  });
+});
+
+describe("the state lock", () => {
+  it("a holder keeps its lock fresh, so a long locked section never looks stale to a waiting hook", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-lock-"));
+    const timing = { staleMs: 300, waitMs: 2000, heartbeatMs: 50 };
+    const a = new StateDir(dir, timing), b = new StateDir(dir, timing);
+    const order: string[] = [];
+    const slow = a.locked("s", async () => { order.push("a-in"); await new Promise((r) => setTimeout(r, 800)); order.push("a-out"); });
+    await new Promise((r) => setTimeout(r, 20));
+    await b.locked("s", async () => { order.push("b"); });
+    await slow;
+    expect(order).toEqual(["a-in", "a-out", "b"]);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -52,6 +52,9 @@ const cases: [string, (b: Doc, m: Doc) => void, string][] = [
     m.rows[0].authority.restrictions = [{ id: "pep", when: { fact: "pep", op: "eq", value: true }, band: "non-delegable" }];
     entry(b, "approve-one").facts.pep = { arg: "/pep" }; // batch entry still lacks it
   }, "fact.missing"],
+  ["a fact named like an Object.prototype property", (b) => { b.facts.constructor = { type: "string", record: "value" }; }, "fact.reserved-name"],
+  ["a match condition's in has no array", (b) => { const t = b.tools.find((x: Doc) => x.match.when); t.match.when = { arg: "/reason", op: "in", value: "duplicate" }; }, "condition.in-not-array"],
+  ["a fixed currency other than the ceiling's", (b) => { entry(b, "approve-batch").items.facts.amount.currency = { const: "USD" }; }, "fact.currency-mismatch"],
 ];
 
 describe("each cross-file rule trips on its own", () => {
@@ -86,6 +89,12 @@ describe("valid variations stay valid", () => {
 });
 
 describe("warnings", () => {
+  it("a money fact whose currency is fixed rather than read from the call", () => {
+    const b = binding(); entry(b, "approve-batch").items.facts.amount.currency = { const: "EUR" };
+    const r = lintBinding(b, matrix02());
+    expect(r.ok).toBe(true);
+    expect(rules(r, "warning")).toEqual(["fact.currency-fixed"]);
+  });
   it("a string fact without an explicit record mode", () => {
     const b = binding(); delete b.facts.task.record;
     const r = lintBinding(b, matrix02());

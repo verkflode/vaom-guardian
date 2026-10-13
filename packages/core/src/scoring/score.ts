@@ -7,6 +7,7 @@
 // - The agent's stated certainty never adds: it can only lower the composite or cap the level.
 // - Gates and floors only cap. Nothing here can lift a placement past what its composite earns.
 import { evalCondition } from "../eval/conditions.ts";
+import { factOf } from "../eval/facts.ts";
 import type { FactValue, Money, Reason } from "../eval/types.ts";
 import { durationSeconds } from "../lint/duration.ts";
 import { DIMENSIONS } from "../lint/scoring.ts";
@@ -66,12 +67,12 @@ export function score(policy: Validated, input: ScoreInput): ScoreResult {
     if (!cap || STRICTER[level] > STRICTER[cap]) cap = level;
     reasons.push({ code, detail, row: input.row });
   };
-  const holds = (c: Validated) => evalCondition(c, (f) => input.facts[f], "fact") === true;
+  const holds = (c: Validated) => evalCondition(c, (f) => factOf(input.facts, f), "fact") === true;
 
   const d = policy.dimensions;
   if (d.dataCompleteness) {
     const failed = (d.dataCompleteness.checks as Validated[])
-      .filter((c) => !((c.present ?? []) as string[]).every((f) => f in input.facts) || (c.when !== undefined && !holds(c.when)))
+      .filter((c) => !((c.present ?? []) as string[]).every((f) => Object.hasOwn(input.facts, f)) || (c.when !== undefined && !holds(c.when)))
       .map((c) => c.id as string);
     dimensions.dataCompleteness = withList({ score: 1 - failed.length / d.dataCompleteness.checks.length }, "failed", failed);
   }
@@ -130,21 +131,25 @@ export function capLevel(level: Level, cap: "medium" | "low" | undefined): Level
 function fires(g: Validated, input: ScoreInput): boolean | null {
   const h = input.history;
   if (!h) return null;
-  const windowMs = g.window ? (durationSeconds(g.window) ?? 0) * 1000 : null;
+  // A window that can't be read, or is zero, would count nothing: the signal fires (lint refuses both).
+  const windowS = g.window ? durationSeconds(g.window) : null;
+  if (g.window && !windowS) return null;
+  const windowMs = windowS === null ? null : windowS * 1000;
   const group: Record<string, FactValue> = {};
   for (const f of (g.groupBy ?? []) as string[]) {
-    if (!(f in input.facts)) return true; // no group to compare against: unfamiliar by definition
-    group[f] = input.facts[f]!;
+    const v = factOf(input.facts, f);
+    if (v === undefined) return true; // no group to compare against: unfamiliar by definition
+    group[f] = v;
   }
   switch (g.kind) {
     case "unseen": {
-      const v = input.facts[g.fact];
+      const v = factOf(input.facts, g.fact);
       if (v === undefined) return true;
       const seen = h.seen(input.row, g.fact, v, windowMs);
       return seen === null ? null : !seen;
     }
     case "unusual-value": {
-      const v = numeric(input.facts[g.fact]);
+      const v = numeric(factOf(input.facts, g.fact));
       if (v === null) return true;
       const prior = h.values(input.row, g.fact, group, windowMs);
       if (prior === null) return null;
@@ -153,7 +158,8 @@ function fires(g: Validated, input: ScoreInput): boolean | null {
       return v.n > g.factor * median(xs);
     }
     case "burst": {
-      const n = h.count(input.row, group, windowMs ?? 0);
+      if (windowMs === null) return null;
+      const n = h.count(input.row, group, windowMs);
       return n === null ? null : n >= g.count;
     }
     default:

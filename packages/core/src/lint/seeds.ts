@@ -33,8 +33,13 @@ export function lintSeeds(seeds: unknown, policy: Policy): LintResult {
     // be disclosed to reviewers but never reached.
     else if (ov.seeding.rate > 0.5) err("row.rate-unreachable", `${p}/row`, `row ${seed.row}'s seeding rate ${ov.seeding.rate} can't be reached: at most half a review queue can be planted`);
     else if ((ov.recordsFeed ?? []).length > 0) err("row.records-feed", `${p}/row`, `row ${seed.row}'s records feed ${ov.recordsFeed.join(", ")}; seeding is never allowed there`);
-    const matched = (policy.binding.tools as Validated[]).filter((t) => matches(t, { tool: seed.tool, arguments: seed.arguments }) !== false);
-    if (matched.length === 0) err("tool.unmapped", `${p}/tool`, `no binding entry maps ${seed.tool} with these arguments`);
+    // As the evaluator does: an entry whose match condition can't be read makes the call unplaceable, so
+    // such a seed would never reach a reviewer.
+    const results = (policy.binding.tools as Validated[]).map((t) => ({ t, m: matches(t, { tool: seed.tool, arguments: seed.arguments }) }));
+    const unevaluable = results.filter((x) => x.m === null).map((x) => x.t.id as string);
+    const matched = results.filter((x) => x.m === true).map((x) => x.t);
+    if (unevaluable.length) err("tool.unevaluable", `${p}/arguments`, `entry ${unevaluable.join(", ")} can't evaluate its match condition on these arguments; the seed would be unplaceable`);
+    else if (matched.length === 0) err("tool.unmapped", `${p}/tool`, `no binding entry maps ${seed.tool} with these arguments`);
     else if (matched.some((t) => !(row.capabilities as string[]).includes(t.capability))) {
       err("tool.other-row", `${p}/tool`, `${seed.tool} maps to ${[...new Set(matched.map((t) => t.capability))].join(", ")}, not only to row ${seed.row}`);
     }

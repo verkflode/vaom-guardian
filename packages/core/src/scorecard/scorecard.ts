@@ -3,8 +3,12 @@
 //
 // What it holds to:
 // - Every metric is read per decision type (matrix row), as thresholds and targets are set per row.
-// - Reviewer privacy: metrics are aggregated per row. Nothing here reads approver_id, and nothing is
-//   reported per reviewer, whatever the matrix's reviewerLevelMetrics says.
+// - Reviewer privacy: metrics are aggregated per row and its reviewer role. Nothing here reads
+//   approver_id, and no reviewer is named, whatever the matrix's reviewerLevelMetrics says. A role held by
+//   one person is that person, though: there the review figures describe them, and a deployment should
+//   know that before it publishes a scorecard.
+// - Honest about its input: records are counted once by id, and records it couldn't date are counted
+//   and reported, not silently left out.
 // - Honesty about coverage: a metric the records can't support is reported as not measured, with the
 //   reason, never as healthy. A metric whose healthy range the matrix doesn't declare reports its value
 //   with no verdict. Below a minimum sample there is no verdict either: a signal from eight records is
@@ -42,6 +46,9 @@ export interface Scorecard {
   matrix: { id: string; version: string };
   period: { from: string; to: string };
   records: number;
+  /** What was left out, and why: repeated record ids (counted once), and records, seeds and spawns
+   *  whose timestamp couldn't be read. */
+  input: { duplicates: number; undated: { records: number; seeds: number; spawns: number }; formats: Record<string, number> };
   rows: RowScorecard[];
   workflow: Record<string, Metric>;
   agents: Record<string, Metric>;
@@ -91,20 +98,34 @@ export function scorecard(matrix: Validated, records: readonly DecisionRecord[],
   const from = Date.parse(opts.from), to = Date.parse(opts.to);
   if (Number.isNaN(from) || Number.isNaN(to) || to <= from) throw new Error("scorecard: the period must be two timestamps, from before to");
   const minSample = opts.minSample ?? 20;
-  const inPeriod = records.filter((r) => { const t = Date.parse(r.request.ts); return t >= from && t < to; });
+  const byId = new Map<string, DecisionRecord>();
+  let duplicates = 0;
+  for (const r of records) { if (byId.has(r.id)) duplicates++; else byId.set(r.id, r); }
+  const unique = [...byId.values()];
+  const dated = <T>(xs: readonly T[], ts: (x: T) => string) => xs.filter((x) => !Number.isNaN(Date.parse(ts(x))));
+  const within = <T>(xs: readonly T[], ts: (x: T) => string) => xs.filter((x) => { const t = Date.parse(ts(x)); return t >= from && t < to; });
+  const inPeriod = within(unique, (r) => r.request.ts);
   const weeks = (to - from) / (7 * 86_400_000);
+  const formats: Record<string, number> = {};
+  for (const r of inPeriod) formats[r.format] = (formats[r.format] ?? 0) + 1;
+  const undated = {
+    records: unique.length - dated(unique, (r) => r.request.ts).length,
+    seeds: (opts.seeds ?? []).length - dated(opts.seeds ?? [], (s) => s.ts).length,
+    spawns: (opts.spawns ?? []).length - dated(opts.spawns ?? [], (s) => s.ts).length,
+  };
 
-  const seeds = (opts.seeds ?? []).filter((s) => { const t = Date.parse(s.ts); return t >= from && t < to; });
+  const seeds = within(opts.seeds ?? [], (s) => s.ts);
   const rows = (matrix.rows as Validated[]).filter((row) => row.authority?.kind === "delegable").map((row) => rowScorecard(row, inPeriod, minSample, seeds.filter((s) => s.row === row.id), opts.seedMinSample ?? 10));
   return {
     format: SCORECARD_FORMAT,
     matrix: { id: matrix.id, version: matrix.version },
     period: { from: opts.from, to: opts.to },
     records: inPeriod.length,
+    input: { duplicates, undated, formats },
     rows,
     workflow: {
       oversightLoad: oversightLoad(matrix, inPeriod, weeks),
-      chainIntegrity: chainIntegrity((opts.spawns ?? []).filter((s) => { const t = Date.parse(s.ts); return t >= from && t < to; })),
+      chainIntegrity: chainIntegrity(within(opts.spawns ?? [], (s) => s.ts)),
       boundaryVerification: boundaryVerification(matrix, opts.probes ?? [], to),
     },
     agents: scopeDenials(inPeriod, minSample),
@@ -237,7 +258,7 @@ function reviewEngagement(row: Validated, records: readonly DecisionRecord[], mi
   return {
     status: diagnosis ? "breach" : "healthy", ...values,
     approvalThreshold: PAPER_DEFAULTS.maxApprovalShare, ...(minPlausibleSeconds !== undefined ? { minPlausibleReviewSeconds: minPlausibleSeconds } : {}),
-    note: "aggregated per row; the approval threshold is the paper's default; modifications aren't recorded, only approvals and rejections",
+    note: "aggregated per row and its reviewer role, never per named reviewer (where one person holds the role, these are that person's figures); the approval threshold is the paper's default; modifications aren't recorded, only approvals and rejections",
     ...(diagnosis ? { diagnosis } : {}),
   };
 }
@@ -250,7 +271,7 @@ function chainIntegrity(spawns: readonly SpawnOutcome[]): Metric {
   const outside = spawns.filter((s) => s.decision === "deny" && s.reason === "outside_allowed_patterns").length;
   const faults = spawns.filter((s) => s.decision === "deny").length - breaches - outside;
   const values = { spawns: spawns.length, allowed, authorityBreaches: breaches, outsidePatterns: outside, requestFaults: faults };
-  if (spawns.length === 0) return { status: "healthy", ...values, note: "no spawn was attempted in the period" };
+  if (spawns.length === 0) return { status: "insufficient-sample", ...values, note: "no spawn was attempted in the period, so there's nothing to judge" };
   if (breaches + outside === 0) return { status: "healthy", ...values, note: "every spawn stayed inside the matrix's patterns and limits, or was a malformed request" };
   return {
     status: "breach", ...values,
@@ -287,12 +308,17 @@ function oversightLoad(matrix: Validated, records: readonly DecisionRecord[], we
       else if (p.band === "A") minutes += (ov.auditSampleRate ?? 0) * (ov.auditMinutes ?? 0);
     }
   }
+  // Scaling a short period up to a week turns a busy hour into a crisis; an empty period says nothing.
+  const days = weeks * 7;
+  if (weeks < 1) return { status: "insufficient-sample", fundedHoursPerWeek: funded, periodDays: days, note: `the period is ${days.toFixed(2)} days; review load is judged over at least a week` };
+  if (records.length === 0) return { status: "insufficient-sample", fundedHoursPerWeek: funded, periodDays: days, note: "no decisions in the period" };
   const hoursPerWeek = minutes / 60 / weeks;
   const loadFactor = funded > 0 ? hoursPerWeek / funded : hoursPerWeek > 0 ? Number.POSITIVE_INFINITY : 0;
   const breach = loadFactor > max;
   return {
     status: breach ? "breach" : "healthy", requiredHoursPerWeek: hoursPerWeek, fundedHoursPerWeek: funded, loadFactor, maxUtilization: max,
-    note: "required hours from the matrix's per-decision review, escalation and audit minutes, over the period",
+    periodDays: days,
+    note: `required hours from the matrix's per-decision review, escalation and audit minutes, over ${days.toFixed(2)} days`,
     ...(breach ? { diagnosis: "Readiness Condition 6 no longer holds: rubber-stamping is the likely next failure" } : {}),
   };
 }

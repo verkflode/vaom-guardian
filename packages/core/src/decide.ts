@@ -72,14 +72,14 @@ function place(policy: Policy, call: Call, ledger: CapLedger, input: DecideInput
       const a = policy.rowById.get(row)?.authority;
       const cap = [...(a?.cumulativeCaps ?? []), ...(a?.rateCaps ?? [])].find((c: { id: string }) => c.id === capId);
       const windowS = cap ? durationSeconds(cap.window) : null;
-      if (windowS === null) return null; // unknown window: treat as unreadable, which breaches
+      if (!windowS) return null; // unknown or zero window: treat as unreadable, which breaches
       return ledger.usage(row, capId, recordedGroup(policy, row, capId, rawGroup, input.factKey), now, windowS * 1000);
     },
   });
 
-  // Record the context the call ran under: the first live one covering its first placement's row.
-  const firstRow = decision.placements[0]?.row;
-  const used = firstRow ? live.find((c) => c.rows.includes(firstRow) || (policy.rowById.get(firstRow)?.authority?.serves ?? []).some((s: string) => c.rows.includes(s))) : undefined;
+  // Record the context the call ran under: the first one that authorised its first placement.
+  const usedId = decision.placements[0]?.contexts?.[0];
+  const used = usedId ? live.find((c) => c.id === usedId) : undefined;
   const { contexts: _registry, extraContexts: _extra, verifications: _verifications, ...recordInput } = input;
   const record = buildRecord({
     ...recordInput,

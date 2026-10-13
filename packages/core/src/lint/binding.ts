@@ -4,6 +4,7 @@ import { validateBinding01 } from "../generated/validators.js";
 import { lintMatrix } from "./matrix.ts";
 import { inRange } from "./semver.ts";
 import { schemaFindings } from "./schema-findings.ts";
+import { conditionShape, RESERVED_FACT_NAMES } from "./shape.ts";
 import { result, tok, type Finding, type LintResult, type Validated } from "./types.ts";
 
 export const BINDING_FORMAT = "vaom.binding/0.1";
@@ -35,6 +36,7 @@ function crossFindings(b: Validated, m: Validated): Finding[] {
 
   const facts: Record<string, Validated> = b.facts;
   for (const [name, def] of Object.entries(facts)) {
+    if (RESERVED_FACT_NAMES.has(name)) err("fact.reserved-name", `/facts/${tok(name)}`, `fact name ${name} is reserved: every object already has it, so it could read as present when it's missing`);
     if (def.type === "string" && def.record === undefined) {
       warn("fact.record-unset", `/facts/${tok(name)}`, `string fact ${name} will be recorded in clear by default; set record explicitly ("digest" or "omit" if it identifies a person or counterparty, "value" if clear is intended)`);
     }
@@ -45,6 +47,8 @@ function crossFindings(b: Validated, m: Validated): Finding[] {
     const p = `/tools/${i}`;
     if (ids.has(t.id)) err("tool.duplicate-id", `${p}/id`, `entry id ${t.id} is used more than once`);
     ids.add(t.id);
+
+    out.push(...conditionShape(t.match?.when, `${p}/match/when`));
 
     const rows = (m.rows as Validated[]).filter((row) => (row.capabilities as string[]).includes(t.capability));
     if (rows.length !== 1) {
@@ -68,6 +72,15 @@ function crossFindings(b: Validated, m: Validated): Finding[] {
       if (!def) { err("fact.undeclared", path, `fact ${f} is not declared in facts`); continue; }
       const isMoneyExtractor = typeof ex === "object" && ex !== null && "amount" in ex;
       if ((def.type === "money") !== isMoneyExtractor) err("fact.extractor-type", path, `fact ${f} has type ${def.type} but a ${isMoneyExtractor ? "money" : "plain"} extractor`);
+      // A fixed currency asserts what the tool's amounts are in. Legitimate only for a tool that can't take
+      // another currency; it must at least agree with the row's limits, or amounts would be compared as if
+      // they were in the limit's currency.
+      if (isMoneyExtractor && typeof ex.currency === "object" && ex.currency !== null && "const" in ex.currency) {
+        const fixed = ex.currency.const;
+        warn("fact.currency-fixed", `${path}/currency`, `fact ${f} fixes its currency to ${JSON.stringify(fixed)} instead of reading it from the call; right only if the tool can't take another currency`);
+        const limits = [a.valueCeiling?.fact === f ? a.valueCeiling.limit?.currency : undefined, ...((a.cumulativeCaps ?? []) as Validated[]).filter((c) => c.fact === f && c.total).map((c) => c.total.currency)].filter(Boolean);
+        for (const cur of new Set(limits)) if (cur !== fixed) err("fact.currency-mismatch", `${path}/currency`, `fact ${f} is fixed to ${JSON.stringify(fixed)}, but row ${row.id} limits it in ${cur}`);
+      }
     }
 
     const need = (f: string, why: string) => {

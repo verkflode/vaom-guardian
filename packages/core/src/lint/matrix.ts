@@ -5,6 +5,7 @@ import { validateMatrix01, validateMatrix02, type Validator } from "../generated
 import { durationSeconds } from "./duration.ts";
 import { result, tok, type Finding, type LintResult, type Validated } from "./types.ts";
 import { schemaFindings } from "./schema-findings.ts";
+import { conditionShape, zeroDurations } from "./shape.ts";
 
 export const MATRIX_FORMATS: Record<string, Validator> = {
   "vaom.matrix/0.1": validateMatrix01,
@@ -54,6 +55,17 @@ function semanticFindings(m: Validated): Finding[] {
     if (kind === "row" && !rowById.has(value)) err("ref.row", path, `row ${value} does not exist`);
   });
 
+  out.push(...zeroDurations(m));
+
+  // Breaker ids are unique across the matrix, wherever the breaker is declared.
+  const breakers = new Set<string>();
+  const breakerIds = (list: Validated[] | undefined, path: string) => (list ?? []).forEach((b, k) => {
+    if (breakers.has(b.id)) err("breaker.duplicate-id", `${path}/${k}/id`, `circuit breaker id ${b.id} is used more than once`);
+    breakers.add(b.id);
+  });
+  breakerIds(m.circuitBreakers, "/circuitBreakers");
+  rows.forEach((row, i) => breakerIds(row.circuitBreakers, `/rows/${i}/circuitBreakers`));
+
   if (m.effective?.until && Date.parse(m.effective.until) <= Date.parse(m.effective.from)) {
     err("effective.order", "/effective/until", "effective.until is not after effective.from");
   }
@@ -91,6 +103,25 @@ function semanticFindings(m: Validated): Finding[] {
         if (mech && mech !== "absent") warn("structural.weak", `${p}/authority/boundaries/${k}`, `boundary ${b} is ${mech}; a non-delegable capability should be absent`);
       });
     }
+
+    // Consent rights must exist as approval records before execution. v0.1 has no way to carry or check
+    // them, so a matrix that declares one is refused rather than run with the right silently ignored.
+    if ((a.requiredApprovals ?? []).length > 0) err("row.required-approvals-unsupported", `${p}/authority/requiredApprovals`, `row ${row.id} declares consent rights (requiredApprovals), which this version doesn't enforce; it would run without them`);
+
+    // Ids within a row are unique: cap ids key the ledger, restriction ids name what was hit.
+    const capIds = new Set<string>();
+    for (const [list, key] of [[a.cumulativeCaps, "cumulativeCaps"], [a.rateCaps, "rateCaps"]] as const) {
+      ((list ?? []) as Validated[]).forEach((c, k) => {
+        if (capIds.has(c.id)) err("cap.duplicate-id", `${p}/authority/${key}/${k}/id`, `cap id ${c.id} is used more than once in row ${row.id}; caps sharing an id would share a ledger count`);
+        capIds.add(c.id);
+      });
+    }
+    const restrictionIds = new Set<string>();
+    ((a.restrictions ?? []) as Validated[]).forEach((r, k) => {
+      if (restrictionIds.has(r.id)) err("restriction.duplicate-id", `${p}/authority/restrictions/${k}/id`, `restriction id ${r.id} is used more than once in row ${row.id}`);
+      restrictionIds.add(r.id);
+      out.push(...conditionShape(r.when, `${p}/authority/restrictions/${k}/when`));
+    });
 
     if (a.kind !== "delegable") return;
 

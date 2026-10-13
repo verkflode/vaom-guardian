@@ -81,8 +81,27 @@ export function lintProbes(probes: unknown, matrix: Validated): LintResult {
   return result(format, out);
 }
 
+/**
+ * Does a result's `observed` contradict its own evidence? The evidence is re-classified with the same
+ * rules as `classify`. Only the manifest can't be re-checked (it's stored as a digest), so a result
+ * claiming a mechanism is taken to have seen one; everything else must agree. An inconclusive result
+ * claims nothing, so it can't contradict.
+ */
+export function contradiction(r: ProbeResult): string | null {
+  if (r.observed === "inconclusive") return null;
+  const e = r.evidence;
+  const forbiddenTools = [...new Set([...e.forbiddenPresent, ...e.attempted, ...e.denied, ...e.refused])];
+  const expected = classify({
+    manifest: e.forbiddenPresent.length ? e.forbiddenPresent : ["\u0000manifest-not-stored"],
+    forbiddenTools, attempted: e.attempted, denied: e.denied, refused: e.refused, canaryHit: e.canaryHit,
+  }).observed;
+  return expected === r.observed ? null : `observed ${r.observed}, but its evidence shows ${expected}`;
+}
+
 export function checkProbeResult(r: unknown): Finding[] {
-  return validateProbeResult01(r) ? [] : schemaFindings(validateProbeResult01.errors);
+  if (!validateProbeResult01(r)) return schemaFindings(validateProbeResult01.errors);
+  const c = contradiction(r as ProbeResult);
+  return c ? [{ rule: "observed.contradicts-evidence", severity: "error", path: "/observed", message: c }] : [];
 }
 
 export type BoundaryStatus = "verified" | "degraded" | "failed" | "overdue" | "unverified";
@@ -109,7 +128,8 @@ export function assessBoundaries(matrix: Validated, results: readonly ProbeResul
     const claimed = b.intendedMechanism as Mechanism;
     const rows = ((matrix.rows ?? []) as Validated[]).filter((r) => ((r.authority?.boundaries ?? []) as string[]).includes(id)).map((r) => r.id as string);
     const conclusive = results
-      .filter((r) => r.boundary === id && r.observed !== "inconclusive" && Date.parse(r.ts) <= now)
+      // A result whose claim its own evidence contradicts is treated as inconclusive: never credited.
+      .filter((r) => r.boundary === id && r.observed !== "inconclusive" && Date.parse(r.ts) <= now && contradiction(r) === null)
       .sort((x, y) => Date.parse(y.ts) - Date.parse(x.ts));
     const latest = conclusive[0];
     const breakers = ((matrix.circuitBreakers ?? []) as Validated[])

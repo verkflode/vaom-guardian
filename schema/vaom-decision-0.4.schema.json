@@ -189,6 +189,14 @@
         "reasons"
       ],
       "additionalProperties": false,
+      "description": "The outcome follows from the band: allow is Band A (or no band, for a preparatory call), review is B, escalate is C, refuse is non-delegable, and unplaceable has no band. Review and escalate name their approver.",
+      "allOf": [
+        { "if": { "properties": { "outcome": { "const": "allow" } } }, "then": { "properties": { "band": { "enum": ["A", null] } } } },
+        { "if": { "properties": { "outcome": { "const": "review" } } }, "then": { "properties": { "band": { "const": "B" } }, "required": ["approver_role"] } },
+        { "if": { "properties": { "outcome": { "const": "escalate" } } }, "then": { "properties": { "band": { "const": "C" } }, "required": ["approver_role"] } },
+        { "if": { "properties": { "outcome": { "const": "refuse" } } }, "then": { "properties": { "band": { "const": "non-delegable" } } } },
+        { "if": { "properties": { "outcome": { "const": "unplaceable" } } }, "then": { "properties": { "band": { "const": null } } } }
+      ],
       "properties": {
         "outcome": {
           "$ref": "#/$defs/outcome"

@@ -6,6 +6,12 @@ import type { FactValue, Money } from "./types.ts";
 
 type Validated = any;
 
+/** A fact's value, read as an own property only: a fact named like an Object.prototype member is missing
+ *  unless it was extracted. */
+export function factOf<T>(facts: Readonly<Record<string, T>>, name: string): T | undefined {
+  return Object.hasOwn(facts, name) ? facts[name] : undefined;
+}
+
 export type Extracted = { ok: true; value: FactValue } | { ok: false; why: string };
 
 export function extractFact(def: Validated, ex: Validated, args: unknown): Extracted {

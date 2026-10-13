@@ -3,18 +3,22 @@
 // vaom-guardian verify --config guardian.json
 // vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]
 // vaom-guardian probe import --config guardian.json result.json [result.json...]
+// vaom-guardian credentials --config guardian.json
+// vaom-guardian revoke --config guardian.json <credential-id>
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { scorecard, type Metric, type ProbeResult } from "@verkflode/vaom-guardian-core";
 import { createGuardian, readConfig } from "./guardian.ts";
+import { listCredentials, revokeCredential } from "./credentials.ts";
 import { importProbeResults, verifyEvidence } from "./evidence.ts";
 import { createGuardianServer } from "./server.ts";
 import { Store } from "./store.ts";
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: { config: { type: "string" }, enroll: { type: "string" }, from: { type: "string" }, to: { type: "string" }, json: { type: "boolean" } } });
 const command = positionals[0];
-if (!values.config || (command !== "serve" && command !== "verify" && command !== "scorecard" && !(command === "probe" && positionals[1] === "import"))) {
-  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]\n       vaom-guardian probe import --config guardian.json result.json [...]");
+const known = ["serve", "verify", "scorecard", "credentials", "revoke"];
+if (!values.config || !(known.includes(command ?? "") || (command === "probe" && positionals[1] === "import"))) {
+  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]\n       vaom-guardian probe import --config guardian.json result.json [...]\n       vaom-guardian credentials --config guardian.json\n       vaom-guardian revoke --config guardian.json <credential-id>");
   process.exit(2);
 }
 const config = readConfig(values.config);
@@ -22,8 +26,26 @@ const config = readConfig(values.config);
 if (command === "verify") {
   const r = verifyEvidence(new Store(config.dataDir), `http://localhost:${config.port}`);
   console.log(`${r.records} records, ${r.sessions} sessions, ${r.approvals} approvals, ${r.seeds} planted cases`);
+  if (r.open.length) console.log(`${r.open.length} decision(s) never resolved; their cap use stays counted: ${r.open.join(", ")}`);
   for (const p of r.problems) console.log(`PROBLEM ${p}`);
   process.exit(r.problems.length ? 1 : 0);
+}
+
+if (command === "credentials") {
+  const all = listCredentials(new Store(config.dataDir));
+  if (all.length === 0) console.log("no credential enrolled");
+  for (const c of all) console.log(`${c.id}  ${c.label}  ${c.roles.join(",")}  enrolled ${c.enrolled}${c.revoked ? `  REVOKED ${c.revoked}` : ""}`);
+  process.exit(0);
+}
+
+if (command === "revoke") {
+  const id = positionals[1];
+  if (!id) { console.error("revoke: name the credential id (see vaom-guardian credentials)"); process.exit(2); }
+  try {
+    const c = revokeCredential(new Store(config.dataDir), id, Date.now());
+    console.log(`revoked ${c.id} (${c.label}); a running Guardian refuses it from its next approval`);
+    process.exit(0);
+  } catch (e) { console.error((e as Error).message); process.exit(1); }
 }
 
 if (command === "probe") {

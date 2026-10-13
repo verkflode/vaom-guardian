@@ -6,7 +6,7 @@
 // Parallel tool calls run their hooks at the same time, so every read-modify-write of a session's state
 // happens under a lock: a directory created with mkdir, which is atomic. A lock is held for one round
 // trip to the Guardian, never while waiting for a human.
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
 export interface CallState { request_id: string; tool: string; session: string }
@@ -37,13 +37,17 @@ export interface SessionState {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-const LOCK_STALE_MS = 30_000;
-const LOCK_WAIT_MS = 10_000;
+/** Lock timing: a lock untouched for staleMs belonged to a process that died; a hook waits at most waitMs
+ *  for it; a holder touches it every heartbeatMs. */
+export interface LockTiming { staleMs: number; waitMs: number; heartbeatMs: number }
+const LOCK: LockTiming = { staleMs: 30_000, waitMs: 10_000, heartbeatMs: 5_000 };
 
 export class StateDir {
   readonly dir: string;
-  constructor(dir: string) {
+  private readonly lockTiming: LockTiming;
+  constructor(dir: string, lockTiming: LockTiming = LOCK) {
     this.dir = dir;
+    this.lockTiming = lockTiming;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o700);
   }
@@ -72,18 +76,22 @@ export class StateDir {
     rmSync(this.file(session), { force: true });
   }
 
-  /** Run `fn` holding this session's lock. A lock older than LOCK_STALE_MS belonged to a process that died. */
+  /** Run `fn` holding this session's lock. A lock untouched for longer than staleMs belonged to a process that died. */
   async locked<T>(session: string, fn: () => Promise<T>): Promise<T> {
     const lock = `${this.file(session)}.lock`;
-    const until = Date.now() + LOCK_WAIT_MS;
+    const { staleMs, waitMs, heartbeatMs } = this.lockTiming;
+    const until = Date.now() + waitMs;
     for (;;) {
       try { mkdirSync(lock, { mode: 0o700 }); break; } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        try { if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) { rmSync(lock, { recursive: true, force: true }); continue; } } catch { continue; }
+        try { if (Date.now() - statSync(lock).mtimeMs > staleMs) { rmSync(lock, { recursive: true, force: true }); continue; } } catch { continue; }
         if (Date.now() > until) throw new Error("timed out waiting for the shim state lock");
         await new Promise((r) => setTimeout(r, 15));
       }
     }
-    try { return await fn(); } finally { rmSync(lock, { recursive: true, force: true }); }
+    // Keep the lock fresh while we hold it: one locked section can make several Guardian round trips, and
+    // must never look stale to a hook waiting behind it. A holder that dies stops touching it.
+    const beat = setInterval(() => { try { const t = new Date(); utimesSync(lock, t, t); } catch { /* gone: nothing to keep */ } }, heartbeatMs);
+    try { return await fn(); } finally { clearInterval(beat); rmSync(lock, { recursive: true, force: true }); }
   }
 }

@@ -29,6 +29,8 @@ describe("the scoring linter", () => {
     ["history keyed on an omitted fact", (_s, b) => { b.facts.counterparty.record = "omit"; }, "history.omitted"],
     ["an unusual-value signal on a string", (s) => { s.dimensions.anomaly.signals[1].fact = "task"; }, "history.not-numeric"],
     ["an unusual-value signal on a digested amount", (_s, b) => { b.facts.amount.record = "digest"; }, "history.not-clear"],
+    ["a burst window of zero", (s) => { s.dimensions.anomaly.signals[2].window = "PT0S"; }, "duration.zero"],
+    ["a rule whose in has no array", (s) => { s.dimensions.ruleMatch.rules[0].when = { fact: "counterparty", op: "in", value: "V-1" }; }, "condition.in-not-array"],
   ];
   for (const [name, mutate, rule] of cases) {
     it(`rejects ${name} (${rule})`, () => {
@@ -259,5 +261,20 @@ describe("history comes from the Guardian's own records", () => {
     const ledger = new CapLedger();
     expect(() => decide(policy, approve("U1"), ledger, input(at(5)))).toThrow();
     expect(ledger.historySeen("invoice.approve", "counterparty", { value: "x" }, 0, null)).toBeNull();
+  });
+});
+
+describe("the scorer reads only facts that were extracted", () => {
+  const policy = (dims: Doc) => ({ ...scoringPolicy("invoice-standard"), dimensions: dims });
+  const quiet: History = { seen: () => true, values: () => [], count: () => 0 };
+
+  it("a fact named like an Object.prototype member is missing unless it was extracted", () => {
+    const s = policy({ dataCompleteness: { weight: 1, floor: 0, checks: [{ id: "has-x", present: ["constructor"] }] } });
+    expect(score(s, { row: "r", facts: {}, history: quiet }).dimensions.dataCompleteness?.score).toBe(0);
+    expect(score(s, { row: "r", facts: { constructor: "x" } as Record<string, string>, history: quiet }).dimensions.dataCompleteness?.score).toBe(1);
+  });
+  it("a burst signal whose window is zero fires, rather than counting nothing", () => {
+    const s = policy({ anomaly: { weight: 1, floor: 0, signals: [{ id: "b", kind: "burst", count: 3, window: "P0D", penalty: 1 }] } });
+    expect(score(s, { row: "r", facts: {}, history: quiet }).dimensions.anomaly).toMatchObject({ score: 0, fired: ["b"] });
   });
 });

@@ -3,6 +3,7 @@
 // a row whose policy is missing can't be compiled.
 import { validateScoring01 } from "../generated/validators.js";
 import { schemaFindings } from "./schema-findings.ts";
+import { conditionShape, zeroDurations } from "./shape.ts";
 import { result, type Finding, type LintResult, type Validated } from "./types.ts";
 
 export const SCORING_FORMAT = "vaom.scoring/0.1";
@@ -37,6 +38,10 @@ export function lintScoring(scoring: unknown, binding?: unknown): LintResult {
   (d.dataCompleteness?.checks ?? []).forEach((c: Validated, i: number) => unique(c.id, `/dimensions/dataCompleteness/checks/${i}/id`));
   (d.ruleMatch?.rules ?? []).forEach((r: Validated, i: number) => unique(r.id, `/dimensions/ruleMatch/rules/${i}/id`));
   (d.anomaly?.signals ?? []).forEach((g: Validated, i: number) => unique(g.id, `/dimensions/anomaly/signals/${i}/id`));
+
+  out.push(...zeroDurations(s));
+  (d.dataCompleteness?.checks ?? []).forEach((c: Validated, i: number) => out.push(...conditionShape(c.when, `/dimensions/dataCompleteness/checks/${i}/when`)));
+  (d.ruleMatch?.rules ?? []).forEach((r: Validated, i: number) => out.push(...conditionShape(r.when, `/dimensions/ruleMatch/rules/${i}/when`)));
 
   if (binding !== undefined) out.push(...factFindings(s, binding as Validated));
   return result(format, out);

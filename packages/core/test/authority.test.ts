@@ -238,3 +238,60 @@ describe("leases", () => {
     expect(leases.mayObserve("L1", T0)).toBe(false);
   });
 });
+
+describe("a context holding several chained rows derives under the strictest", () => {
+  // invoice.approve allows one level of reader; invoice.duplicate-anomaly allows five levels, of readers and writers.
+  const p = () => policyWith((m) => {
+    m.rows[1].authority.chain = { maxDepth: 5, maxFanOut: 5, allowedSubagents: [{ type: "reader", capabilities: ["erp:invoice.flag", "erp:invoice.read"] }, { type: "writer", capabilities: ["erp:invoice.flag"] }] };
+  });
+  const child = (extra: object = {}) => ({ id: "kid", session: "s2", agent: { id: "reader-1" }, rows: ["invoice.duplicate-anomaly"], subagentType: "reader", ...extra });
+
+  it("depth is the smaller of the two, whichever rows the child covers", () => {
+    const reg = new ContextRegistry(p());
+    expect(root(reg).depthLeft).toBe(1);
+    const kid = reg.derive("root", child(), T0);
+    expect(kid.ok && kid.context.depthLeft).toBe(0);
+    expect(reg.derive("kid", child({ id: "grandkid", session: "s3" }), T0)).toMatchObject({ ok: false, outcome: "refuse" });
+  });
+  it("the type must be allowed by every chain, in either row order", () => {
+    for (const order of [["invoice.approve", "invoice.duplicate-anomaly"], ["invoice.duplicate-anomaly", "invoice.approve"]]) {
+      const reg = new ContextRegistry(p());
+      reg.open({ id: "root", session: "s1", agent, rows: order }, T0);
+      expect(reg.derive("root", child({ subagentType: "writer" }), T0)).toMatchObject({ ok: false, outcome: "escalate" });
+    }
+  });
+  it("capabilities are those every chain's pattern allows, and the shorter lifetime and count apply", () => {
+    const reg = new ContextRegistry(p());
+    root(reg);
+    expect(reg.derive("root", child({ scopes: ["erp:invoice.read"] }), T0)).toMatchObject({ ok: false, outcome: "escalate" });
+    const kid = reg.derive("root", child(), T0);
+    expect(kid.ok && kid.context.scopes).toEqual(["erp:invoice.flag"]);
+    expect(kid.ok && kid.context.expiresAt).toBe(T0 + min(5));
+    expect(reg.derive("root", child({ id: "kid2", session: "s3" }), T0)).toMatchObject({ ok: false, outcome: "refuse" });
+  });
+});
+
+describe("a task-bound context authorises only calls naming its task", () => {
+  const p = policyWith();
+  const call = (args: Record<string, unknown>) => ({ tool: "mcp__erp__approve_invoice", arguments: { vendor_id: "V-7", amount: "100", currency: "EUR", po_number: "PO-1", ...args } });
+  const run = (contexts: LiveContext[], args: Record<string, unknown>) => evaluate(p, call(args), { now: Date.parse("2026-10-06T09:00:00Z"), verifications: { "erp:invoice.approve": true }, contexts, capUsage: () => ({ total: "0", count: 0 }) });
+
+  it("a call with no task isn't placed under a context bound to one", () => {
+    const d = run([{ id: "c", rows: ["invoice.approve"], task: "INV-1" }], {});
+    expect(d.outcome).toBe("unplaceable");
+    expect(d.reasons.map((r) => r.code)).toContain("context.task-mismatch");
+  });
+  it("an unbound context still covers it", () => {
+    expect(run([{ id: "c", rows: ["invoice.approve"] }], {}).outcome).not.toBe("unplaceable");
+  });
+});
+
+describe("a lapsed lease stays lapsed", () => {
+  it("re-attestation can't revive a lease that has run out; it needs a new grant", () => {
+    const p = policyWith(); const contexts = new ContextRegistry(p); const leases = new LeaseRegistry(p, contexts);
+    leases.grant({ id: "L1", row: "invoice.duplicate-anomaly", agent }, T0);
+    const r = leases.reattest("L1", [{ role: "ap-owner", record: "a" }], T0 + min(120));
+    expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/run out/) });
+    expect(leases.respond("L1", { contextId: "resp", session: "s9", alert: "A" }, T0 + min(121)).ok).toBe(false);
+  });
+});

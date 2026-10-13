@@ -27,6 +27,13 @@ describe("the seeds linter", () => {
     ["a tool the binding doesn't map", (s) => { s.seeds[0].tool = "mcp__deploy__nuke"; }, "tool.unmapped"],
     ["a tool that maps to another row", (s) => { s.seeds[0].tool = "mcp__telemetry__query"; }, "tool.other-row"],
   ];
+  it("rejects a seed whose arguments leave a match condition unreadable (tool.unevaluable): it would be unplaceable", () => {
+    const b = load("incident.binding.json");
+    b.tools.find((t: Doc) => t.id === "rolling-restart").match.when = { arg: "/region", op: "eq", value: "eu" };
+    const r = compilePolicy(load("incident.matrix.json"), b, scoringPolicies());
+    if (!r.ok) throw new Error(JSON.stringify(r.findings));
+    expect(rules(lintSeeds(load("incident.seeds.json"), r.policy))).toEqual(["tool.unevaluable"]);
+  });
   it("rejects a row whose seeding rate can't be reached (row.rate-unreachable)", () => {
     const m = load("incident.matrix.json");
     m.rows.find((r: Doc) => r.id === "remediation.restart").oversight.seeding.rate = 0.6;

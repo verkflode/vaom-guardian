@@ -16,7 +16,7 @@ import type { Finding } from "../lint/types.ts";
 import { capLevel, score as computeScore, type Level } from "../scoring/score.ts";
 import { evalCondition } from "./conditions.ts";
 import { addDecimal, cmpDecimal } from "./decimal.ts";
-import { extractFact } from "./facts.ts";
+import { extractFact, factOf } from "./facts.ts";
 import { resolvePointer } from "./pointer.ts";
 import type { Band, Call, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, PlacementScore, Policy, Reason, Reservation } from "./types.ts";
 
@@ -176,7 +176,7 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   for (const r of a.restrictions ?? []) collectFacts(r.when, needed);
   for (const c of [...(a.cumulativeCaps ?? []), ...(a.rateCaps ?? [])]) { if (c.fact) needed.add(c.fact); for (const g of c.groupBy ?? []) needed.add(g); }
   if (a.valueCeiling) needed.add(a.valueCeiling.fact);
-  for (const f of needed) if (!(f in facts)) return fail("fact.missing", `row ${row.id} needs fact ${f}`);
+  for (const f of needed) if (!Object.hasOwn(facts, f)) return fail("fact.missing", `row ${row.id} needs fact ${f}`);
 
   if (a.kind === "non-delegable") {
     return { ...base, band: "non-delegable", outcome: "refuse", facts, reasons: [...reasons, { code: "non-delegable", detail: a.reason, row: row.id }] };
@@ -186,7 +186,7 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   const restrictionsHit = (allowed: (b: Band) => boolean): Band | "unplaceable" | null => {
     let hit: Band | null = null;
     for (const r of a.restrictions ?? []) {
-      const v = evalCondition(r.when, (f) => facts[f], "fact");
+      const v = evalCondition(r.when, (f) => factOf(facts, f), "fact");
       if (v === null) return "unplaceable";
       if (v && allowed(r.band)) { hit = hit ? stricter(hit, r.band) : r.band; reasons.push({ code: "restriction", detail: r.id, row: row.id }); }
     }
@@ -197,6 +197,7 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
     // A lease's observation context authorises preparatory capabilities in its scopes, whatever they serve.
     const observing = ctx.contexts.some((c) => c.observation === true && c.scopes?.includes(entry.capability));
     const serving = ctx.contexts.filter((c) => !c.observation && (a.serves as string[]).some((s) => c.rows.includes(s)));
+    const authorising = observing ? ctx.contexts.filter((c) => c.observation === true && c.scopes?.includes(entry.capability)) : serving.filter((c) => inScope(c, entry.capability));
     if (observing) { /* authorised by an observation lease */ }
     else if (serving.length === 0) return fail("context.none", `no open execution context for a row ${row.id} serves (${a.serves.join(", ")})`);
     else if (!serving.some((c) => inScope(c, entry.capability))) return fail("context.scope", `no context serving row ${row.id} has ${entry.capability} in its scope`);
@@ -207,19 +208,19 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
       const r = capCheck(c, row.id, facts, ctx, pending, reservations, reasons);
       if (r === "breach") return { ...base, band: "non-delegable", outcome: "refuse", facts, reasons };
     }
-    return withReservations({ ...base, band: null, outcome: "allow", facts, reasons: [...reasons, { code: "preparatory", row: row.id }] }, reservations);
+    return withReservations({ ...base, band: null, outcome: "allow", facts, contexts: authorising.map((c) => c.id), reasons: [...reasons, { code: "preparatory", row: row.id }] }, reservations);
   }
 
-  // Delegable: authority exists only inside a live execution context covering this row, bound to this
-  // task if the call names one.
+  // Delegable: authority exists only inside a live execution context covering this row. A context bound
+  // to a task authorises only calls naming that task; a call that names none isn't in its workflow.
   // Observation contexts never authorise a decision.
   const covering = ctx.contexts.filter((c) => !c.observation && c.rows.includes(row.id));
   if (covering.length === 0) return fail("context.none", `no open execution context covers row ${row.id}`);
   const scoped = covering.filter((c) => inScope(c, entry.capability));
   if (scoped.length === 0) return fail("context.scope", `no context covering row ${row.id} has ${entry.capability} in its scope`);
-  const task = facts.task;
-  const applicable = task === undefined ? scoped : scoped.filter((c) => c.task === undefined || c.task === task);
-  if (applicable.length === 0) return fail("context.task-mismatch", `the call's task isn't the one its context is bound to`);
+  const task = factOf(facts, "task");
+  const applicable = scoped.filter((c) => c.task === undefined || c.task === task);
+  if (applicable.length === 0) return fail("context.task-mismatch", task === undefined ? "the call names no task, and its context is bound to one" : `the call's task isn't the one its context is bound to`);
 
   // Confidence picks among the bands the matrix authorises; everything after can only narrow.
   // The score comes only from the row's own scoring policy, computed here from the placement's facts.
@@ -248,7 +249,7 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   }
 
   if (a.valueCeiling) {
-    const v = facts[a.valueCeiling.fact] as Money, lim = a.valueCeiling.limit;
+    const v = factOf(facts, a.valueCeiling.fact) as Money, lim = a.valueCeiling.limit;
     if (v.currency !== lim.currency) return fail("currency.mismatch", `${a.valueCeiling.fact} is in ${v.currency}; the ceiling is in ${lim.currency}`);
     if (cmpDecimal(v.amount, lim.amount) > 0) { band = stricter(band, a.valueCeiling.onExceed); reasons.push({ code: "ceiling.exceeded", detail: `${v.amount} ${v.currency} > ${lim.amount} ${lim.currency}`, row: row.id }); }
   }
@@ -270,10 +271,11 @@ function place(policy: Policy, entry: Validated, call: Call, ctx: EvalContext, p
   }
 
   const withScore = scored ? { score: scored } : {};
-  if (band === "non-delegable") return { ...base, band, outcome: "refuse", facts, ...withScore, reasons };
+  const contexts = applicable.map((c) => c.id);
+  if (band === "non-delegable") return { ...base, band, outcome: "refuse", facts, ...withScore, contexts, reasons };
   const outcome: Outcome = band === "A" ? "allow" : band === "B" ? "review" : "escalate";
   const approverRole = band === "B" ? a.reviewer : band === "C" ? a.escalation.role : undefined;
-  return withReservations({ ...base, band, outcome, ...(approverRole ? { approverRole } : {}), facts, ...withScore, reasons }, reservations);
+  return withReservations({ ...base, band, outcome, ...(approverRole ? { approverRole } : {}), facts, ...withScore, contexts, reasons }, reservations);
 }
 
 /** A context without explicit scopes covers everything its rows reach; with scopes, only those. */
@@ -287,12 +289,12 @@ function withReservations(p: Placement, r: Reservation[]): Placement {
 
 /** Check one cap, counting this placement and earlier ones in the same call. */
 function capCheck(c: Validated, rowId: string, facts: Record<string, FactValue>, ctx: EvalContext, pending: Map<string, { total: string | null; count: number }>, reservations: Reservation[], reasons: Reason[]): "ok" | "breach" | "unplaceable" {
-  const groupKey = JSON.stringify((c.groupBy ?? []).map((g: string) => facts[g]));
+  const groupKey = JSON.stringify((c.groupBy ?? []).map((g: string) => factOf(facts, g)));
   const key = `${rowId}\u0000${c.id}\u0000${groupKey}`;
   const usage = ctx.capUsage(rowId, c.id, groupKey);
   let amount: string | undefined;
   if (c.total) {
-    const v = facts[c.fact] as Money;
+    const v = factOf(facts, c.fact) as Money;
     if (v.currency !== c.total.currency) return "unplaceable";
     amount = v.amount;
   }

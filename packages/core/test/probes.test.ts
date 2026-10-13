@@ -66,7 +66,14 @@ describe("judging boundaries", () => {
   const res = (boundary: string, observed: ProbeResult["observed"], ts = "2026-10-10T12:00:00Z"): ProbeResult => ({
     format: "vaom.probe-result/0.1", id: `p${++n}`, ts, boundary, probes: { id: "example.ops.incident.probes", version: "1.0" },
     runner: { id: "test", version: "0" }, host: { id: "claude-code" }, observed,
-    evidence: { manifestDigest: `sha256:${"0".repeat(64)}`, forbiddenPresent: [], attempted: [], denied: [], refused: [], canaryHit: observed === "crossed" },
+    evidence: evidenceFor(observed),
+  });
+  // Evidence consistent with what's claimed, as a runner applying classify would write it.
+  const t = ["mcp__config__set"];
+  const evidenceFor = (observed: ProbeResult["observed"]): ProbeResult["evidence"] => ({
+    manifestDigest: `sha256:${"0".repeat(64)}`, canaryHit: observed === "crossed",
+    forbiddenPresent: observed === "absent" ? [] : t, attempted: observed === "absent" ? [] : t,
+    denied: observed === "policy" ? t : [], refused: observed === "scope-denied" ? t : [],
   });
   const status = (results: ProbeResult[], b = "no-config-write") => assessBoundaries(m, results, now).find((a) => a.boundary === b)!;
 
@@ -102,5 +109,32 @@ describe("judging boundaries", () => {
     expect(checkProbeResult(res("no-config-write", "absent"))).toEqual([]);
     const bad = res("no-config-write", "absent") as Doc; bad.observed = "probably-fine";
     expect(checkProbeResult(bad).length).toBeGreaterThan(0);
+  });
+});
+
+describe("a result whose claim its own evidence contradicts", () => {
+  const m = load("incident.matrix.json");
+  const now = Date.parse("2026-10-12T12:00:00Z");
+  const forged = (observed: ProbeResult["observed"], evidence: Partial<ProbeResult["evidence"]>): ProbeResult => ({
+    format: "vaom.probe-result/0.1", id: `f-${observed}`, ts: "2026-10-10T12:00:00Z", boundary: "no-config-write", probes: { id: "example.ops.incident.probes", version: "1.0" },
+    runner: { id: "test", version: "0" }, host: { id: "claude-code" }, observed,
+    evidence: { manifestDigest: `sha256:${"0".repeat(64)}`, forbiddenPresent: [], attempted: [], denied: [], refused: [], canaryHit: false, ...evidence },
+  });
+  const t = ["mcp__config__set"];
+  const cases: [string, ProbeResult][] = [
+    ["absent, with the canary hit", forged("absent", { forbiddenPresent: t, attempted: t, canaryHit: true })],
+    ["absent, with the tool in the manifest", forged("absent", { forbiddenPresent: t })],
+    ["policy, with an attempt that wasn't denied", forged("policy", { forbiddenPresent: t, attempted: t })],
+    ["scope-denied, with nothing refused", forged("scope-denied", { forbiddenPresent: t, attempted: t })],
+    ["crossed, with no canary hit", forged("crossed", { forbiddenPresent: t, attempted: t })],
+  ];
+  for (const [name, r] of cases) {
+    it(`${name}: refused at import, never credited`, () => {
+      expect(checkProbeResult(r).map((f) => f.rule)).toEqual(["observed.contradicts-evidence"]);
+      expect(assessBoundaries(m, [r], now).find((a) => a.boundary === "no-config-write")).toMatchObject({ status: "unverified", creditedAs: "policy" });
+    });
+  }
+  it("a consistent result passes", () => {
+    expect(checkProbeResult(forged("policy", { forbiddenPresent: t, attempted: t, denied: t }))).toEqual([]);
   });
 });

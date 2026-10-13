@@ -138,8 +138,8 @@ describe("enforcement health", () => {
 
 describe("chain integrity (metric 12)", () => {
   const sp = (decision: "allow" | "deny", reason: string, ts = "2026-10-06T09:00:00Z") => ({ ts, decision, reason });
-  it("no spawns at all: healthy, and the note says nothing was attempted", () => {
-    expect(scorecard(matrix02(), [], { ...period, spawns: [] }).workflow.chainIntegrity).toMatchObject({ status: "healthy", spawns: 0, note: "no spawn was attempted in the period" });
+  it("no spawns at all: no verdict, and the note says nothing was attempted", () => {
+    expect(scorecard(matrix02(), [], { ...period, spawns: [] }).workflow.chainIntegrity).toMatchObject({ status: "insufficient-sample", spawns: 0, note: expect.stringMatching(/no spawn was attempted/) });
   });
   it("no spawn outside the envelope: healthy, even with malformed requests", () => {
     const m = scorecard(matrix02(), [], { ...period, spawns: [sp("allow", "context_derived"), sp("deny", "parent_session_mismatch")] }).workflow.chainIntegrity;
@@ -150,7 +150,7 @@ describe("chain integrity (metric 12)", () => {
     expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "outside_allowed_patterns")] }).workflow.chainIntegrity).toMatchObject({ status: "breach", outsidePatterns: 1 });
   });
   it("only spawns inside the period count", () => {
-    expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "authority_breach", "2026-10-01T00:00:00Z")] }).workflow.chainIntegrity!.status).toBe("healthy");
+    expect(scorecard(matrix02(), [], { ...period, spawns: [sp("deny", "authority_breach", "2026-10-01T00:00:00Z")] }).workflow.chainIntegrity).toMatchObject({ status: "insufficient-sample", spawns: 0 });
   });
 });
 
@@ -172,5 +172,29 @@ describe("from real records", () => {
     expect(m.bandDistribution).toMatchObject({ counts: { A: 0, B: 25, C: 0 } });
     expect(m.reviewEngagement).toMatchObject({ status: "healthy", approvalShare: 0.8, medianReviewSeconds: 90 });
     expect(m.verifierEffectiveness!.status).toBe("not-measured");
+  });
+});
+
+describe("the scorecard says what its input couldn't support", () => {
+  it("oversight load has no verdict on a period under a week, or with no decisions", () => {
+    const hour = { from: "2026-10-06T09:00:00Z", to: "2026-10-06T10:00:00Z" };
+    expect(scorecard(matrix02(), many(3, { band: "B", ts: "2026-10-06T09:10:00Z" }), hour).workflow.oversightLoad).toMatchObject({ status: "insufficient-sample", note: expect.stringMatching(/at least a week/) });
+    expect(scorecard(matrix02(), [], period).workflow.oversightLoad).toMatchObject({ status: "insufficient-sample", note: "no decisions in the period" });
+  });
+  it("a record given twice is counted once, and the report says so", () => {
+    const rs = many(25, { band: "B" });
+    const s = scorecard(matrix02(), [...rs, ...rs.slice(0, 5)], period);
+    expect(s.records).toBe(25);
+    expect(s.input.duplicates).toBe(5);
+    expect(row(s)).toEqual(row(scorecard(matrix02(), rs, period)));
+  });
+  it("records, seeds and spawns it can't date are counted, not silently dropped; formats are tallied", () => {
+    const s = scorecard(matrix02(), [rec(), rec({ ts: "2026-13-45T99:00:00Z" })], {
+      ...period,
+      seeds: [{ row: "invoice.approve", ts: "nope", result: "missed" }],
+      spawns: [{ ts: "nope", decision: "allow", reason: "context_derived" }],
+    });
+    expect(s.input.undated).toEqual({ records: 1, seeds: 1, spawns: 1 });
+    expect(s.input.formats).toEqual({ "vaom.decision/0.4": 1 });
   });
 });

@@ -4,7 +4,11 @@
 //   events.jsonl    enrollments, approvals, rejections, expiries and incidents
 // Nothing is rewritten in place. A torn last line (a crash mid-write) is skipped on load; damage anywhere
 // else stops the Guardian from starting, because cap usage can't be trusted from a damaged history.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync, chmodSync } from "node:fs";
+// Before the first append after a start, a file's tail is made whole: a complete last line missing its
+// newline gets one, and a torn partial line is cut off. A torn line was never answered on (every append is
+// fsynced before the Guardian answers), so nothing acknowledged is lost, and the next append can't be glued
+// onto it.
+import { closeSync, existsSync, fsyncSync, ftruncateSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextEntry } from "@verkflode/vaom-guardian-acs";
 import type { DecisionRecord } from "@verkflode/vaom-guardian-core";
@@ -25,8 +29,35 @@ export class Store {
     return join(this.dir, name);
   }
 
+  private repaired = new Set<string>();
+
+  private repairTail(name: string): void {
+    if (this.repaired.has(name)) return;
+    this.repaired.add(name);
+    const p = this.path(name);
+    if (!existsSync(p)) return;
+    const fd = openSync(p, "r+");
+    try {
+      const size = fstatSync(fd).size;
+      if (size === 0) return;
+      const last = Buffer.alloc(1);
+      readSync(fd, last, 0, 1, size - 1);
+      if (last[0] === 0x0a) return;
+      const text = readFileSync(p);
+      const start = text.lastIndexOf(0x0a) + 1;
+      let whole = true;
+      try { JSON.parse(text.subarray(start).toString("utf8")); } catch { whole = false; }
+      if (whole) writeSync(fd, "\n", size);
+      else ftruncateSync(fd, start);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
   private append(name: string, lines: readonly unknown[]): void {
     if (lines.length === 0) return;
+    this.repairTail(name);
     const fd = openSync(this.path(name), "a", 0o600);
     try {
       writeSync(fd, lines.map((l) => JSON.stringify(l) + "\n").join(""));

@@ -57,10 +57,10 @@ function setup(over: Partial<EndpointConfig> = {}, unverified = false) {
 
 type Setup = ReturnType<typeof setup>;
 
-function envelope(method: string, payload: unknown, o: { session?: string; agent?: string; at?: number; now?: number; requestId?: string; chainHash?: string } = {}) {
+function envelope(method: string, payload: unknown, o: { session?: string; agent?: string; at?: number; now?: number; requestId?: string; chainHash?: string; version?: string } = {}) {
   const metadata: any = { agent_id: o.agent ?? AGENT, session_id: o.session ?? S1 };
   if (o.chainHash !== undefined) metadata.session_state = { chain_hash: o.chainHash };
-  return { jsonrpc: "2.0", id: ++n, method, params: { acs_version: "0.1.0", request_id: o.requestId ?? uuid(), timestamp: new Date(o.at ?? T0).toISOString(), metadata, payload } };
+  return { jsonrpc: "2.0", id: ++n, method, params: { acs_version: o.version ?? "0.1.0", request_id: o.requestId ?? uuid(), timestamp: new Date(o.at ?? T0).toISOString(), metadata, payload } };
 }
 const signed = (env: ReturnType<typeof envelope>, session = S1) => sign(env, sessionKey(IKM, session), "agent-key");
 
@@ -78,6 +78,7 @@ function send(s: Setup, method: string, payload: unknown, o: Parameters<typeof e
 
 const hello = { acs_versions_supported: ["0.1.0"], methods_implemented: ["steps/sessionStart", "steps/toolCallRequest", "steps/toolCallResult", "steps/subagentStart", "steps/sessionEnd"], transports_supported: ["http"], provenance_producer: "none", profiles_supported: ["acs-core", "acs-audit"] };
 const tool = (name: string, args: Record<string, unknown>) => ({ tool: { name }, arguments: Object.fromEntries(Object.entries(args).map(([k, v]) => [k, { value: v }])) });
+const turn = { turn_id: "t-1", triggered_by: "user_message" };
 const restart = (incident: string, stateless = true) => tool("mcp__deploy__rolling_restart", { incident_id: incident, service: "web", stateless });
 
 function started(over: Partial<EndpointConfig> = {}, unverified = false) {
@@ -147,7 +148,7 @@ describe("transport checks fail closed", () => {
   it("answers methods it doesn't evaluate with an error, not allow: wrapped MCP, memory, skills", () => {
     const s = started();
     for (const m of ["protocols/mcp/tools/call", "steps/memoryStore", "steps/skillLoad", "agbom/snapshot"]) expect(send(s, m, {}).error?.code, m).toBe(ERR.METHOD_NOT_FOUND);
-    expect(send(s, "steps/turnStart", {}).result).toMatchObject({ decision: "allow", reason_codes: ["not_evaluated"] });
+    expect(send(s, "steps/turnStart", turn).result).toMatchObject({ decision: "allow", reason_codes: ["not_evaluated"] });
   });
   it("rejects a payload that fails its step schema", () => {
     expect(send(started(), "steps/toolCallRequest", { tool: { name: "x" } }).error.code).toBe(ERR.INVALID_PARAMS);
@@ -293,7 +294,7 @@ describe("sub-agents (7D: two read-only sub-agents, depth one)", () => {
   });
   it("reports every spawn decision, allowed or denied, as evidence for chain integrity", () => {
     const s = started();
-    expect(spawn(s, "log-analysis").spawns).toEqual([{ session: S1, subagent_session: SUB, agent: `${AGENT}/log-analysis`, subagent_type: "log-analysis", decision: "allow", reason: "context_derived", context: expect.any(String) }]);
+    expect(spawn(s, "log-analysis").spawns).toEqual([{ session: S1, subagent_session: SUB, agent: `${AGENT}/log-analysis`, subagent_type: "log-analysis", decision: "allow", reason: "context_derived", context: expect.any(String), intent_derivation: "inherit_subset" }]);
     expect(spawn(s, "shell", "33333333-3333-4333-8333-333333333333").spawns).toMatchObject([{ subagent_type: "shell", decision: "deny", reason: "outside_allowed_patterns", why: expect.any(String) }]);
     spawn(s, "dependency-check", "44444444-4444-4444-8444-444444444444");
     expect(spawn(s, "log-analysis", "55555555-5555-4555-8555-555555555555").spawns).toMatchObject([{ decision: "deny", reason: "authority_breach" }]);
@@ -326,7 +327,7 @@ describe("the audit chain", () => {
   it("denies with chain_mismatch when the agent's head disagrees, and accepts a matching one", () => {
     const s = started();
     expect(send(s, "steps/toolCallRequest", restart("INC-7"), { chainHash: "00".repeat(32) }).result).toMatchObject({ decision: "deny", reason_codes: ["chain_mismatch"] });
-    expect(send(s, "steps/turnStart", {}, { chainHash: s.ep.head(S1)! }).result.decision).toBe("allow");
+    expect(send(s, "steps/turnStart", turn, { chainHash: s.ep.head(S1)! }).result.decision).toBe("allow");
   });
   it("after sessionEnd, the session takes nothing more", () => {
     const s = started();
@@ -334,3 +335,55 @@ describe("the audit chain", () => {
     expect(send(s, "steps/toolCallRequest", restart("INC-7")).error.code).toBe(ERR.SESSION_REFUSED);
   });
 });
+
+describe("fixes from review: state, chaining and fidelity", () => {
+  it("a step that fails after it was chained leaves no entry: the agent's last head still matches", () => {
+    const s = started({ approvalTimeoutSeconds: 1.5 });
+    const head = s.ep.head(S1)!;
+    const ask = send(s, "steps/toolCallRequest", restart("INC-7"));
+    expect(ask.error.code).toBe(ERR.INTERNAL);
+    expect(ask.entries).toEqual([]);
+    expect(s.ep.head(S1)).toBe(head);
+    expect(send(s, "steps/turnStart", turn, { chainHash: head }).result.decision).toBe("allow");
+  });
+  it("a refusal whose response fails is undone in full: the ledger matches one rebuilt from the records", () => {
+    const s = started({ deferTimeoutMs: 1.5 });
+    const r = send(s, "steps/toolCallRequest", restart("INC-9")); // task mismatch: unplaceable, so a defer
+    expect(r.error.code).toBe(ERR.INTERNAL);
+    expect(s.ledger.historyCount("remediation.restart", {}, T0 + 1, 3_600_000)).toBe(0);
+  });
+  it("sessionEnd and observed steps are checked against their schemas before they act or are chained", () => {
+    const s = started();
+    expect(send(s, "steps/turnStart", {}).error.code).toBe(ERR.INVALID_PARAMS);
+    expect(send(s, "steps/sessionEnd", {}).error.code).toBe(ERR.INVALID_PARAMS);
+    expect(send(s, "steps/toolCallRequest", restart("INC-7")).result.decision).not.toBeUndefined(); // the session is still live
+  });
+  it("an ended session forgets its request ids and can't negotiate again", () => {
+    const s = started();
+    send(s, "steps/sessionEnd", { reason: "completed" });
+    expect((s.ep as unknown as { replay: { ids: Map<string, unknown> } }).replay.ids.has(S1)).toBe(false);
+    expect(send(s, "handshake/hello", hello).error.code).toBe(ERR.SESSION_REFUSED);
+  });
+  it("answers in the version the session negotiated, on every step", () => {
+    const s = setup();
+    expect(send(s, "handshake/hello", { ...hello, acs_versions_supported: ["0.1.0", "0.1.1"] }, { version: "0.1.1" }).result.negotiated_version).toBe("0.1.1");
+    send(s, "steps/sessionStart", { intent: { raw: "INC-7" } }, { version: "0.1.1" });
+    expect(send(s, "steps/toolCallRequest", restart("INC-7"), { version: "0.1.1" }).result.acs_version).toBe("0.1.1");
+  });
+  it("refuses anything signed before the Guardian started, so a restart can't be used to replay", () => {
+    const s = setup({ startedAt: T0 + 1 });
+    expect(send(s, "handshake/hello", hello, { at: T0, now: T0 + 5 }).error.code).toBe(ERR.TIMESTAMP_OUT_OF_WINDOW);
+    expect(send(s, "handshake/hello", hello, { at: T0 + 2, now: T0 + 5 }).result.negotiated_version).toBe("0.1.0");
+  });
+  it("a sub-agent is derived from the session's own context, not another live one sharing the session", () => {
+    const s = setup();
+    send(s, "handshake/hello", hello);
+    // A context on the same session opened first, e.g. a lease's response context, with a narrower row set.
+    s.contexts.open({ id: "other", session: S1, agent: { id: AGENT }, rows: ["remediation.restart"], scopes: ["telemetry:read"] }, T0);
+    send(s, "steps/sessionStart", { intent: { raw: "INC-7" } });
+    const r = send(s, "steps/subagentStart", { subagent_session_id: SUB, parent_session_id: S1, parent_step_id: uuid(), intent_derivation: "inherit_subset", subagent_descriptor: { agent_name: "dependency-check" } });
+    expect(r.result.decision).toBe("allow");
+    expect(s.contexts.live(r.spawns[0]!.context!, T0)?.parent).not.toBe("other");
+  });
+});
+

@@ -2,7 +2,7 @@
   "$schema": "../vaom-scoring-0.1.schema.json",
   "format": "vaom.scoring/0.1",
   "id": "reorder-gate",
-  "version": "1.3",
+  "version": "1.4",
   "title": "Catalogue re-order under the monthly mandate",
   "approval": {
     "role": "procurement-manager",
@@ -52,8 +52,7 @@
             "value": [
               "consumables",
               "spare-parts",
-              "cutting-fluids",
-              "safety"
+              "cutting-fluids"
             ]
           },
           "hard": true

@@ -162,6 +162,13 @@ describe("7D: autonomous incident remediation", () => {
     expect(decide(p, restart(false), loaded(), base(minutes(9), { session: { id: "rem" }, contexts, ...preflight() })).decision.outcome).toBe("escalate");
   });
 
+  it('"anything touching the payment pipeline" is non-delegable: a restart there is refused, whatever the score', () => {
+    const { contexts } = activate();
+    const call: Call = { tool: "mcp__deploy__rolling_restart", arguments: { incident_id: "INC-42", service: "payments-ledger", stateless: true } };
+    const r = decide(p, call, loaded(), base(minutes(9), { session: { id: "rem" }, contexts, ...preflight() }));
+    expect([r.decision.outcome, r.decision.band]).toEqual(["refuse", "non-delegable"]);
+  });
+
   describe('"It spawns two sub-agents within pre-approved spawn patterns"', () => {
     it('"read-only scopes ... expiring in 20 minutes. Neither can spawn further sub-agents"', () => {
       const { contexts } = activate();

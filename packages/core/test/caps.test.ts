@@ -151,3 +151,41 @@ describe("no evidence, no action", () => {
     expect(() => decide(policy, approve("100"), ledger, inputAt("2026-10-02T09:00:01Z", { id: "same" }))).toThrow(/already holds/);
   });
 });
+
+describe("a zero window counts as unreadable, so the cap breaches", () => {
+  it("even if a policy with a P0D cap window got past lint, its cap can't be switched off", () => {
+    const r = compilePolicy(matrix02(), binding(), quietScoring());
+    if (!r.ok) throw new Error("policy");
+    r.policy.rowById.get("invoice.approve").authority.cumulativeCaps[0].window = "P0D";
+    const rec = decide(r.policy, approve("100"), fresh(), inputAt("2026-10-06T09:00:00Z"));
+    expect(rec.decision.band).toBe("B");
+    expect(rec.decision.reasons.map((x) => x.code)).toContain("cap.history-unreadable");
+  });
+});
+
+describe("the record names the context that authorised the call", () => {
+  it("not merely the first live one covering the row", () => {
+    const ts = "2026-10-06T09:00:00Z";
+    const contexts = new ContextRegistry(policy);
+    contexts.open({ id: "narrow", session: "s1", agent: { id: "ap-agent" }, rows: ["invoice.approve"], scopes: ["erp:invoice.read"] }, Date.parse(ts));
+    contexts.open({ id: "wide", session: "s1", agent: { id: "ap-agent" }, rows: ["invoice.approve"] }, Date.parse(ts));
+    const rec = decide(policy, approve("100"), fresh(), { id: "ctx-pick", ts, agent: { id: "ap-agent" }, session: { id: "s1" }, verifications, factKey, contexts });
+    expect(rec.decision.outcome).toBe("allow");
+    expect(rec.request.context?.id).toBe("wide");
+  });
+});
+
+describe("release undoes a decision that never went out", () => {
+  it("its cap use and its place in history both go, so the live ledger matches one rebuilt from records", () => {
+    const ledger = fresh();
+    const kept = decide(policy, approve("1000", "V-9", "A"), ledger, inputAt("2026-10-06T09:00:00Z"));
+    const lost = decide(policy, approve("1000", "V-9", "B"), ledger, inputAt("2026-10-06T09:01:00Z"));
+    ledger.release(lost.id);
+    const rebuilt = new CapLedger(); rebuilt.load([kept]);
+    const now = Date.parse("2026-10-06T10:00:00Z");
+    for (const l of [ledger, rebuilt]) {
+      expect(l.historyCount("invoice.approve", {}, now, 86_400_000)).toBe(1);
+    }
+    expect(ledger.usage("invoice.approve", "per-vendor-daily", kept.reservations[0]!.group, now, 86_400_000)).toEqual(rebuilt.usage("invoice.approve", "per-vendor-daily", kept.reservations[0]!.group, now, 86_400_000));
+  });
+});

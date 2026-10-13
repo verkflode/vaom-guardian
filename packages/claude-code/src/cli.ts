@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { loadSecrets, readConfig } from "@verkflode/vaom-guardian-server";
 import { GuardianClient } from "./client.ts";
-import { runHook } from "./hook.ts";
+import { runHook, UnclassifiedHookError } from "./hook.ts";
 import { hookSettings, HOOK_TIMEOUT_SECONDS } from "./settings.ts";
 import { StateDir } from "./state.ts";
 
@@ -59,7 +59,8 @@ const raw = await new Promise<string>((res, rej) => {
 });
 let input: any;
 try { input = JSON.parse(raw); } catch { fatal("the hook input is not JSON"); }
-event = String(input?.hook_event_name ?? "");
+// Anything but a named event is answered as a tool call would be on failure: deny, exit 2.
+event = typeof input?.hook_event_name === "string" ? input.hook_event_name : "";
 
 let out;
 try {
@@ -68,7 +69,7 @@ try {
   const client = new GuardianClient({ port: config.port, ikm: secrets.ikm, keyId: "claude-code-shim", agentId: values.agent, requestTimeoutMs: 10_000 });
   out = await runHook(input, { client, state: new StateDir(stateDir), deadline, approvalsUrl: `http://localhost:${config.port}/` });
 } catch (e) {
-  fatal(`can't reach the Guardian's configuration (${(e as Error).message}), so the call is denied`);
+  fatal(e instanceof UnclassifiedHookError ? e.message : `can't reach the Guardian's configuration (${(e as Error).message}), so the call is denied`);
 }
 if (out) process.stdout.write(JSON.stringify(out) + "\n");
 process.exit(0);

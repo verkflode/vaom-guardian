@@ -2,7 +2,7 @@
   "$schema": "../vaom-matrix-0.2.schema.json",
   "format": "vaom.matrix/0.2",
   "id": "example.ops.incident",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "title": "Autonomous incident remediation (VAOM v5 worked example 7D)",
   "description": "A SaaS provider's incident-remediation agent: monitoring on a lease, diagnosis by attenuated sub-agents, and a short enumerated list of bounded remediations. Production configuration changes, schema migrations, customer-data operations and anything touching the payment pipeline are non-delegable. Figures the whitepaper states are used as stated (a 60-minute context, 20-minute read-only sub-agents, chain depth two, composite 0.93 reaching Band A); thresholds, calibration records, lease lifetimes and oversight figures it doesn't state are illustrative.",
   "effective": {
@@ -11,7 +11,7 @@
   "approval": {
     "role": "sre-lead",
     "date": "2026-10-01",
-    "ref": "placeholder://approvals/incident-matrix-1.0.0"
+    "ref": "placeholder://approvals/incident-matrix-1.3.0"
   },
   "roles": {
     "sre-lead": {
@@ -219,7 +219,8 @@
         "deploy:service.rolling-restart"
       ],
       "requiresFacts": [
-        "task"
+        "task",
+        "service"
       ],
       "authority": {
         "kind": "delegable",
@@ -268,6 +269,12 @@
             },
             "band": "C",
             "reason": "Only stateless services are on the bounded remediation list."
+          },
+          {
+            "id": "payment-pipeline",
+            "when": { "fact": "service", "op": "in", "value": ["payments-ledger", "payments-gateway", "payments-reconciler"] },
+            "band": "non-delegable",
+            "reason": "Anything touching the payment pipeline is non-delegable (VAOM v5 worked example 7D): no restart there is within the agent's authority, whatever the score."
           }
         ],
         "executionContext": {

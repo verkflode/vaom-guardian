@@ -75,9 +75,15 @@ const DEFAULT_SUBAGENT_TYPE = "general-purpose";
 const deny = (reason: string): HookOutput => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `VAOM Guardian: ${reason}` } });
 const allow = (reason: string): HookOutput => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: `VAOM Guardian: ${reason}` } });
 
+/** The hook input can't be classified. The CLI answers it like any failure on a tool call: deny, exit 2. */
+export class UnclassifiedHookError extends Error {}
+
 export async function runHook(input: Json, o: ShimOptions): Promise<HookOutput> {
   const event: string = input?.hook_event_name;
   const ccSession: string = input?.session_id;
+  // An input that doesn't say which hook it is can't be told apart from a tool call: deny it. (A named
+  // event we don't handle isn't a tool call, and returns no opinion.)
+  if (typeof event !== "string" || event === "") throw new UnclassifiedHookError("the hook input names no hook event, so it's treated as a tool call and denied");
   if (typeof ccSession !== "string") return event === "PreToolUse" ? deny("the hook input has no session id.") : null;
   switch (event) {
     case "PreToolUse": return preToolUse(input, ccSession, o).catch((e) => deny(`no decision could be obtained, so the call is denied (${(e as Error).message}).`));

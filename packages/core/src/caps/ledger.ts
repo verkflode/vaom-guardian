@@ -90,9 +90,11 @@ export class CapLedger {
     for (const e of this.entries) if (e.decision === decisionId) e.released = true;
   }
 
-  /** Undo a reservation whose decision never went out (e.g. its record couldn't be persisted). */
+  /** Undo a decision that never went out (e.g. its record couldn't be persisted, or its response failed):
+   *  its cap uses are released and it leaves history, since no record of it will exist to rebuild from. */
   release(decisionId: string): void {
     this.settle(decisionId, "withdrawn");
+    this.seen = this.seen.filter((s) => s.decision !== decisionId);
   }
 
   /** Drop entries older than `horizonMs` before `now`; pass at least the longest cap or anomaly window.
@@ -112,7 +114,7 @@ export class CapLedger {
   /** Clear values of `fact` from executed placements on `row` whose group facts match. */
   historyValues(row: string, fact: string, group: Record<string, RecordedFact>, now: number, windowMs: number | null): FactValue[] | null {
     if (!this.loaded) return null;
-    return this.inWindow(now, windowMs).filter((s) => s.executed && s.row === row && inGroup(s, group) && fact in s.values).map((s) => s.values[fact]!);
+    return this.inWindow(now, windowMs).filter((s) => s.executed && s.row === row && inGroup(s, group) && Object.hasOwn(s.values, fact)).map((s) => s.values[fact]!);
   }
 
   /** Placements on `row` whose group facts match, whatever their outcome. */

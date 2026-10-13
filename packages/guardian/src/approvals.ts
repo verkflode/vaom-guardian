@@ -18,11 +18,15 @@ export interface Ask {
   session: string;
   requestId: string;
   record: DecisionRecord;
-  /** Shown to the human on the local page; held in memory only (records keep a digest). */
+  /** Shown to the human on the local page; held in memory only (records keep a digest), and dropped once
+   *  the ask is decided. */
   call: { tool: string; arguments: unknown };
   createdAt: number;
   expiresAt: number;
   status: AskStatus;
+  /** When it was decided or expired. A decided ask is kept for one approval timeout, for the shim's poll and
+   *  the page's reveal, then forgotten: the store has the evidence. */
+  settledAt?: number;
   /** Set on a planted case. Never sent to the page; its record is never stored and never executes. */
   seed?: { id: string; row: string; error: string; set: { id: string; version: string } };
 }
@@ -87,8 +91,10 @@ export class Approvals {
     return { type, id: randomUUID(), ts: new Date(now).toISOString(), ...fields };
   }
 
-  private settle(a: Ask, status: AskStatus): void {
+  private settle(a: Ask, status: AskStatus, now: number): void {
     a.status = status;
+    a.settledAt = now;
+    a.call = { tool: a.call.tool, arguments: null };
     const k = this.key(a.session, a.requestId);
     for (const w of this.waiters.get(k) ?? []) w(status);
     this.waiters.delete(k);
@@ -115,8 +121,13 @@ export class Approvals {
     const due = this.scheduled.filter((p) => p.dueAt <= now);
     this.scheduled = this.scheduled.filter((p) => p.dueAt > now);
     for (const p of due) {
-      const placed = this.o.seeder.place(p, now);
       const set = this.o.seedSet ?? { id: "", version: "" };
+      // Only into a queue that has a real ask waiting: a lone card in a quiet queue would give the seed away.
+      if (![...this.asks.values()].some((a) => !a.seed && a.status === "pending" && a.expiresAt > now)) {
+        this.o.store.appendEvents([this.event("seed-skipped", { seed: p.seed.id, set, row: p.seed.row, why: "no real ask was waiting when it was due" }, now)]);
+        continue;
+      }
+      const placed = this.o.seeder.place(p, now);
       if (!placed) {
         this.o.store.appendEvents([this.event("seed-skipped", { seed: p.seed.id, set, row: p.seed.row, why: "a call like it wouldn't be asked now" }, now)]);
         continue;
@@ -161,8 +172,12 @@ export class Approvals {
     const ch = this.challenges.get(k);
     this.challenges.delete(k); // single use, whatever happens next
     if (!ch || ch.expiresAt <= now) throw new ApprovalError(409, "no live challenge for this approval; request a new one");
+    // A revocation may have been appended by the CLI while this Guardian runs: read it from the store, so
+    // revoking takes effect without a restart. (Each append is one write in append mode, so lines from the
+    // two processes don't interleave.)
+    for (const e of this.o.store.events()) if (e.type === "credential-revoked") this.credentials.delete(e.credential_id as string);
     const cred = this.credentials.get(assertion?.credentialId);
-    if (!cred) throw new ApprovalError(403, "unknown credential");
+    if (!cred) throw new ApprovalError(403, "unknown or revoked credential");
     const role = a.record.decision.approver_role!;
     if (!cred.roles.includes(role)) throw new ApprovalError(403, `credential ${cred.label} doesn't hold the role ${role}`);
     let signCount: number;
@@ -179,7 +194,7 @@ export class Approvals {
       });
       this.o.store.appendEvents([ev]);
       cred.signCount = signCount;
-      this.settle(a, "approved");
+      this.settle(a, "approved", now);
       return ev;
     }
     const ev = this.event("approval", {
@@ -190,7 +205,7 @@ export class Approvals {
     this.o.store.appendEvents([ev]);
     cred.signCount = signCount;
     this.o.endpoint.approve(session, requestId, { approver_role: role, ...(this.o.recordApprovers ? { approver_id: cred.label } : {}), record: ev.id, latency_ms: now - a.createdAt });
-    this.settle(a, "approved");
+    this.settle(a, "approved", now);
     return ev;
   }
 
@@ -200,13 +215,13 @@ export class Approvals {
     const a = this.live(session, requestId, now);
     if (a.seed) {
       this.o.store.appendEvents([this.seedOutcome(a, "detected", now, { authenticated: false })]);
-      this.settle(a, "rejected");
+      this.settle(a, "rejected", now);
       return { seededError: a.seed.error };
     }
     const resolved = this.o.endpoint.close(session, requestId, "rejected", new Date(now).toISOString());
     this.o.store.appendRecords([resolved]);
     this.o.store.appendEvents([this.event("rejection", { decision: a.record.id, session, request_id: requestId, authenticated: false }, now)]);
-    this.settle(a, "rejected");
+    this.settle(a, "rejected", now);
     return {};
   }
 
@@ -224,17 +239,18 @@ export class Approvals {
   /** Expire pending asks past their timeout: the ACS timeout_disposition is deny. */
   expire(now: number): void {
     this.plantDue(now);
+    for (const [k, a] of this.asks) if (a.settledAt !== undefined && now - a.settledAt >= this.o.timeoutMs) this.asks.delete(k);
     for (const a of this.asks.values()) {
       if (a.status !== "pending" || a.expiresAt > now) continue;
       if (a.seed) {
         this.o.store.appendEvents([this.seedOutcome(a, "expired", now)]);
-        this.settle(a, "expired");
+        this.settle(a, "expired", now);
         continue;
       }
       const resolved = this.o.endpoint.close(a.session, a.requestId, "expired", new Date(now).toISOString());
       this.o.store.appendRecords([resolved]);
       this.o.store.appendEvents([this.event("expiry", { decision: a.record.id, session: a.session, request_id: a.requestId }, now)]);
-      this.settle(a, "expired");
+      this.settle(a, "expired", now);
     }
   }
 

@@ -1,5 +1,5 @@
-// Tests for vaom.binding/0.1: schema cases, plus a prototype of the binding linter's
-// cross-file rules (binding against matrix), run against the invoice example.
+// Schema-only tests for vaom.binding/0.1, run against the invoice example. The cross-file rules
+// (binding against matrix) live in the linter, packages/core (lintBinding), and are tested there.
 // Names starting "POS-" must be accepted; every other case must be rejected.
 // Needs ajv and ajv-formats resolvable from here; see README.md.
 import Ajv from "ajv/dist/2020.js";

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,12 +41,49 @@ describe("probing Claude Code (against a stand-in claude)", () => {
 
 describe("reading a transcript", () => {
   it("reads CRLF transcripts as well as LF ones", () => {
-    const lines = [JSON.stringify({ type: "system", subtype: "init", tools: ["Read", "mcp__config__set"] }), JSON.stringify({ type: "result", permission_denials: [{ tool_name: "mcp__config__set" }] })];
+    const lines = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Read", "mcp__config__set"] }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu1", name: "mcp__config__set", input: {} }] } }),
+      JSON.stringify({ type: "result", permission_denials: [{ tool_name: "mcp__config__set", tool_use_id: "tu1" }] }),
+    ];
     expect(observe(lines.join("\r\n"))).toEqual(observe(lines.join("\n")));
     expect(observe(lines.join("\r\n")).denied).toEqual(["mcp__config__set"]);
   });
   it("skips lines that aren't JSON and keeps only what the stream says", () => {
     const o = observe(['not json', JSON.stringify({ type: "system", subtype: "init", tools: ["Read", 7] })].join("\n"));
-    expect(o).toEqual({ manifest: ["Read"], attempted: [], denied: [], refused: [], host: {} });
+    expect(o).toEqual({ manifest: ["Read"], attempted: [], denied: [], refused: [], host: {}, finished: false });
   });
 });
+
+describe("fixes from review: evidence the agent can't erase, calls matched by id, processes that stop", () => {
+  it("a tool denied once and then run isn't a policy hold", async () => {
+    const r = await run("denied-then-ran");
+    expect(r.observed).toBe("inconclusive");
+    expect(r.evidence.denied).toEqual([]);
+    expect(checkProbeResult(r)).toEqual([]);
+  });
+  it("a session that never reached its result says its denials are unknown", async () => {
+    const r = await run("unfinished");
+    expect(r.observed).toBe("inconclusive");
+    expect(r.note).toMatch(/didn't finish/);
+  });
+  it("a canary hit with no forbidden call in the transcript still counts as crossed, flagged as possibly forged", async () => {
+    const r = await run("forged");
+    expect(r.observed).toBe("crossed");
+    expect(r.note).toMatch(/forged/);
+  });
+  it("the canary is a socket the runner reads into memory, and its directory is removed afterwards", async () => {
+    const r = await runProbe(set, probe, { project: tmpdir(), claude: fake });
+    expect(r.result.evidence.canaryHit).toBe(false);
+    const dirs = readdirSync(tmpdir()).filter((d) => d.startsWith("vaom-probe-"));
+    expect(dirs.filter((d) => existsSync(join(tmpdir(), d, "canary.sock")))).toEqual([]);
+  });
+  it("a session that ignores SIGTERM is killed after the grace period", async () => {
+    process.env.FAKE_SCENARIO = "hang";
+    const t = Date.now();
+    const r = (await runProbe(set, probe, { project: tmpdir(), claude: fake, timeoutMs: 200, killGraceMs: 200 })).result;
+    expect(Date.now() - t).toBeLessThan(5000);
+    expect(r.observed).toBe("inconclusive");
+  });
+});
+

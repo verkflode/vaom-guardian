@@ -2,7 +2,7 @@
   "$schema": "../vaom-binding.schema.json",
   "format": "vaom.binding/0.1",
   "id": "example.ops.incident.mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Incident matrix on an agent runtime with placeholder deploy, telemetry, status, change and alerting MCP servers",
   "host": {
     "id": "example-runtime",
@@ -16,6 +16,11 @@
     "task": {
       "type": "string",
       "description": "Incident id.",
+      "record": "value"
+    },
+    "service": {
+      "type": "string",
+      "description": "The service the remediation acts on. Recorded in clear: service names aren't personal data, and the payment-pipeline restriction is audited by it.",
       "record": "value"
     },
     "stateless": {
@@ -52,6 +57,9 @@
       "facts": {
         "task": {
           "arg": "/incident_id"
+        },
+        "service": {
+          "arg": "/service"
         },
         "stateless": {
           "arg": "/stateless"
