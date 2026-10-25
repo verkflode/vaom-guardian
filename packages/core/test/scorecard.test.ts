@@ -80,6 +80,8 @@ describe("calibration health", () => {
     expect((m.correlations as Record<string, number>).ruleMatch).toBeCloseTo(1, 12);
     const mixed = many(20, (i) => { const a = (i % 5) / 4, b = Math.floor(i / 5) / 3; return { score: { value: (a + b) / 2, dimensions: { ruleMatch: { score: a }, anomaly: { score: b } } } }; });
     expect(row(scorecard(matrix02(), mixed, period)).metrics.dimensionCorrelation!.status).toBe("healthy");
+    // The matrix can't set this threshold, so the report always says whose it is.
+    expect(m.note).toMatch(/threshold is the paper's default/);
   });
   it("verifier effectiveness: not measured without verdicts; never disagreeing is theater", () => {
     const s = (v?: boolean) => ({ value: 1, dimensions: {}, ...(v !== undefined ? { verified: v } : {}) });
@@ -115,6 +117,16 @@ describe("oversight health", () => {
     expect(scorecard(matrix02(), many(500, { band: "B" }), period).workflow.oversightLoad).toMatchObject({ status: "breach" });
     // Band A costs its audit sample: 1000 x 5% x 4 min = 200 min.
     expect(scorecard(matrix02(), many(1000, { band: "A" }), period).workflow.oversightLoad!.requiredHoursPerWeek).toBeCloseTo(200 / 60, 12);
+  });
+  it("oversight load names the paper's default ceiling when, and only when, the matrix sets none", () => {
+    const set = scorecard(matrix02(), many(450, { band: "B" }), period).workflow.oversightLoad!;
+    expect(set).toMatchObject({ maxUtilization: 0.8 });
+    expect(set.note).not.toMatch(/paper's default/);
+    const m = matrix02();
+    delete (m.oversight as Record<string, unknown>).maxUtilization;
+    const silent = scorecard(m, many(450, { band: "B" }), period).workflow.oversightLoad!;
+    expect(silent).toMatchObject({ maxUtilization: 0.8 });
+    expect(silent.note).toMatch(/sets no maximum utilization, so the ceiling is the paper's default/);
   });
   it("escalations: how many expired, with no verdict while the matrix declares no SLA", () => {
     const rs = [rec({ band: "C", result: "executed" }), rec({ band: "C", result: "expired" }), rec({ band: "C" })];

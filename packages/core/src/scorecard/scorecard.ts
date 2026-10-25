@@ -238,7 +238,7 @@ function dimensionCorrelation(banded: Placed[], minSample: number): Metric {
     status: breach ? "breach" : "healthy",
     correlations, threshold: PAPER_DEFAULTS.maxDimensionCorrelation,
     ...(constant.length ? { constant } : {}),
-    note: "Pearson correlation of each dimension with the composite; a constant dimension has none, and may be a placeholder that always scores the same",
+    note: "Pearson correlation of each dimension with the composite; a constant dimension has none, and may be a placeholder that always scores the same; the threshold is the paper's default",
     ...(breach ? { diagnosis: "Dimension Collapse" } : {}),
   };
 }
@@ -296,7 +296,8 @@ function boundaryVerification(matrix: Validated, probes: readonly ProbeResult[],
 function oversightLoad(matrix: Validated, records: readonly DecisionRecord[], weeks: number): Metric {
   const funded = matrix.oversight?.fundedReviewerHoursPerWeek;
   if (typeof funded !== "number") return { status: "not-measured", note: "the matrix declares no funded reviewer hours" };
-  const max = matrix.oversight.maxUtilization ?? PAPER_DEFAULTS.maxUtilization;
+  const defaulted = typeof matrix.oversight.maxUtilization !== "number";
+  const max = defaulted ? PAPER_DEFAULTS.maxUtilization : matrix.oversight.maxUtilization;
   let minutes = 0;
   for (const row of matrix.rows as Validated[]) {
     const ov = row.oversight;
@@ -318,7 +319,7 @@ function oversightLoad(matrix: Validated, records: readonly DecisionRecord[], we
   return {
     status: breach ? "breach" : "healthy", requiredHoursPerWeek: hoursPerWeek, fundedHoursPerWeek: funded, loadFactor, maxUtilization: max,
     periodDays: days,
-    note: `required hours from the matrix's per-decision review, escalation and audit minutes, over ${days.toFixed(2)} days`,
+    note: `required hours from the matrix's per-decision review, escalation and audit minutes, over ${days.toFixed(2)} days${defaulted ? "; the matrix sets no maximum utilization, so the ceiling is the paper's default" : ""}`,
     ...(breach ? { diagnosis: "Readiness Condition 6 no longer holds: rubber-stamping is the likely next failure" } : {}),
   };
 }
