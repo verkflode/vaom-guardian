@@ -5,8 +5,9 @@
 - **Separate-user setup:** `vaom-guardian shim-key` exports a key file for a shim running as another OS
   user (port, key id and ACS key, without the fact key; it refuses to print to a terminal), and the shim
   reads it with `--key` in place of `--guardian`. The hook settings name the interpreter by its absolute
-  path. [docs/separate-user-macos.md](docs/separate-user-macos.md) is the recipe for macOS (a draft until
-  it has been run end to end).
+  path. `--for-user` makes the hook give no opinion for every OS account but the governed one, since
+  Claude Code's managed settings reach every account. [docs/separate-user-macos.md](docs/separate-user-macos.md)
+  is the recipe for macOS, tested end to end on 2026-10-25.
 - **Typed boundaries:** TypeScript types derived from the schemas (ours and the vendored ACS ones) by
   `pnpm gen:validators`, and every generated validator declared a type guard for its schema's type. The
   endpoint, the handshake, the Guardian's configuration and `checkConfig`'s matrix, the approval API and

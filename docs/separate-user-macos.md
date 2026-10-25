@@ -1,7 +1,7 @@
 # The Guardian as a separate macOS user
 
-**Status: draft, written 2026-10-25. It becomes a tested recipe once the checklist at the end has been run
-on a real Mac and the results are recorded there.**
+**Status: tested on 2026-10-25 (macOS 27.0.1, Node.js 24.22.1, Claude Code 2.1.296): every check in the
+checklist passed. See the [test record](#test-record).**
 
 By default the Guardian runs as the same OS user as the agent. The agent can then read the Guardian's data
 directory, including its secrets, edit its policy files, and stop it ([limits](../README.md#limits)). This
@@ -196,8 +196,27 @@ output (with the links) then goes to a log only that account and administrators 
 
 ## 8. The agent
 
-Log in to Claude Code as the agent (`sudo -iu vaomagent`, then `claude`), and work in a project under
-`/Users/vaomagent`.
+Claude Code keeps its login in the account's keychain, and an account that never logs in to the desktop
+has none unlocked, so `claude`'s own login fails ("Couldn't save your login"). Use a long-lived token
+instead, as the agent:
+
+```sh
+sudo -iu vaomagent
+claude setup-token                      # sign in in a browser; it prints a token valid for a year
+umask 077; cat > ~/.claude-oauth-token  # paste the token, Enter, Ctrl-D
+echo 'export CLAUDE_CODE_OAUTH_TOKEN="$(cat ~/.claude-oauth-token)"' >> ~/.zprofile
+exit
+sudo -iu vaomagent
+claude -p "Say hi"
+```
+
+Then clear the terminal's scrollback. The token is the agent's own login to Claude: its account holds it
+by design.
+
+Sign-in links are long, and a terminal that wraps them copies the line breaks too, which breaks the link.
+On the Mac with the browser, `pbpaste | tr -d '\n' | pbcopy` joins a copied link before you paste it.
+
+Work in a project under `/Users/vaomagent`.
 
 ## Checklist
 
@@ -222,7 +241,60 @@ Run as the agent (`sudo -iu vaomagent`) unless it says otherwise. Each line says
 
 Checks 7 to 9 need the agent project from [`experiments/claude-code-shim/`](../experiments/claude-code-shim/)
 (its MCP stubs) or your own tools bound in the binding.
+[`experiments/separate-user-macos/checks.sh`](../experiments/separate-user-macos/checks.sh) sets up that
+project in `~/vaom-test` and runs checks 1 to 8, 10 and 11, as the agent, with the Guardian running.
+
+Check 9, as the agent, with the approvals page open:
+
+```sh
+cd ~/vaom-test
+claude -p 'Call the mcp__deploy__rolling_restart tool once with incident_id "INC-7", service "web", stateless true. Do nothing else.' \
+  --mcp-config ~/vaom-test/mcp.json --strict-mcp-config --model haiku --max-turns 6
+grep rolling_restart ~/vaom-test/tools-ran.jsonl   # one line, after you approve
+```
+
+Check 14: the probe runs as the agent; the Guardian's account can't read the agent's home, so an
+administrator hands it the result through a pipe:
+
+```sh
+# as the agent
+R=/usr/local/vaom-guardian
+/usr/local/bin/node $R/packages/probe/src/cli.ts run --probes $R/schema/examples/incident.probes.json \
+  --matrix $R/schema/examples/incident.matrix.json --project ~/vaom-test --mcp-config ~/vaom-test/mcp.json \
+  --model haiku --only no-config-write --out ~/vaom-test/results
+# as an administrator
+sudo sh -c 'cat /Users/vaomagent/vaom-test/results/no-config-write-*Z.json' \
+  | G probe import --config /Users/vaomguardian/guardian/guardian.json /dev/stdin
+```
+
+`allowManagedPermissionRulesOnly` makes Claude Code ignore the runner's `--allowedTools` grant. A probe of
+a mounted forbidden tool then still reaches the shim (hooks run first), but a denial by Claude Code's own
+permission check would read as inconclusive, not as the Guardian holding.
 
 ## Test record
 
-Not run yet.
+**2026-10-25**, on a Mac Studio: macOS 27.0.1, Node.js 24.22.1 (nodejs.org installer, signed and
+notarized), pnpm 11.9.0, Claude Code 2.1.296 (Haiku for the agent), this repository at `381c6fe`. Approvals
+from another Mac through the SSH tunnel, with its Touch ID.
+
+| # | Result |
+|---|---|
+| 1–4 | Permission denied for each, including moving the managed settings folder. |
+| 5 | `pkill` as the agent left the Guardian's process running. |
+| 6 | `/api/asks` without the page token: 401. |
+| 7 | The telemetry read was allowed and the stub received it. |
+| 8 | `Bash` (`touch CANARY`) denied; no file. |
+| 9 | The restart waited as an ask; approved with Touch ID through the tunnel; the stub received exactly that call. |
+| 10 | Under `--permission-mode bypassPermissions`, `Bash` was still denied. |
+| 11 | With `disableAllHooks` and an allow-rule for `Bash` in the agent's own settings, `Bash` was still denied. |
+| 12 | Guardian stopped: the telemetry read was denied (connection refused). |
+| 13 | `verify`: 5 records, 6 sessions, 1 approval, no problems. |
+| 14 | `no-config-write` probed as the agent: `absent`, imported; the scorecard counts it verified, and flags the unprobed `no-restricted-ops`. |
+
+Found on the way, and fixed in this recipe:
+
+- A shell variable holding the command doesn't work in zsh; the recipe uses a function.
+- `managed-settings.json` reaches every account; the shim's `--for-user` keeps other accounts unaffected.
+- Claude Code's login needs `setup-token` for an account without a desktop session.
+- macOS adds new accounts to its file-sharing groups (`com.apple.sharepoint.group.*`); nothing here depends
+  on them.
