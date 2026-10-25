@@ -137,11 +137,15 @@ export class AcsEndpoint {
 
       const p = env.params;
       requestId = p.request_id;
+      if (!acceptsVersion(p.acs_version)) throw new AcsError(ERR.UNSUPPORTED_VERSION, `ACS ${p.acs_version} is not supported`, { supported_versions: ["0.1.0"] });
+      // Liveness (§13): always allow, never signature-checked (so a key problem doesn't hide that the Guardian is
+      // up), never chained. It carries no authority: nothing the Guardian decides depends on a ping.
       if (env.method === "system/ping") {
-        out.response = { jsonrpc: "2.0", id, result: { type: "final", acs_version: p.acs_version, request_id: p.request_id, decision: "allow" } };
+        const echo = typeof p.payload?.echo === "string" ? { echo: p.payload.echo } : {};
+        out.response = { jsonrpc: "2.0", id, result: { type: "final", acs_version: p.acs_version, request_id: p.request_id, decision: "allow", payload: { status: "ok", ...echo, server_timestamp: new Date(now).toISOString() } } };
+        if (!validateResponseEnvelope(out.response)) throw new AcsError(ERR.INTERNAL, "built response fails the ACS envelope schema", { errors: brief(validateResponseEnvelope) });
         return out;
       }
-      if (!acceptsVersion(p.acs_version)) throw new AcsError(ERR.UNSUPPORTED_VERSION, `ACS ${p.acs_version} is not supported`, { supported_versions: ["0.1.0"] });
       const sid: string = p.metadata.session_id;
       // key_id names the secret (§10): this Guardian holds one, under its configured label, and rejects any
       // other label rather than try another secret. The error is unsigned: no configured secret matches.

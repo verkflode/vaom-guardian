@@ -164,9 +164,17 @@ describe("transport checks fail closed", () => {
   it("rejects a payload that fails its step schema", () => {
     expect(send(started(), "steps/toolCallRequest", { tool: { name: "x" } }).error.code).toBe(ERR.INVALID_PARAMS);
   });
-  it("answers system/ping without a session", () => {
-    const h = setup().ep.handle(envelope("system/ping", {}), T0);
-    expect(h.response.result.decision).toBe("allow");
+  it("answers system/ping without a session or signature, with §13's payload, outside the chain", () => {
+    const s = started();
+    const before = s.ep.head(S1);
+    const h = s.ep.handle(envelope("system/ping", { echo: "hi" }), T0);
+    expect(h.response.result).toMatchObject({ decision: "allow", payload: { status: "ok", echo: "hi", server_timestamp: new Date(T0).toISOString() } });
+    expect(h.response.result.signature).toBeUndefined();
+    expect(h.entries).toEqual([]);
+    expect(s.ep.head(S1)).toBe(before);
+  });
+  it("checks a ping's ACS version first", () => {
+    expect(setup().ep.handle(envelope("system/ping", {}, { version: "0.2.0" }), T0).response.error.code).toBe(ERR.UNSUPPORTED_VERSION);
   });
 });
 
