@@ -34,10 +34,50 @@
 // allowed the same pattern under the same parent, so authority is unaffected; only which spawn step the
 // evidence links each sub-agent to can swap.
 import { randomUUID } from "node:crypto";
-import { GuardianClient, GuardianError } from "./client.ts";
+import type { ServerHello, ToolCallRequest, ToolCallResult } from "@verkflode/vaom-guardian-acs";
+import { GuardianClient, GuardianError, type StepResult } from "./client.ts";
 import { StateDir, type SessionState } from "./state.ts";
 
-type Json = any;
+/**
+ * Claude Code's hook input: the fields this shim reads. Claude Code publishes no schema for it, so runHook
+ * checks each field once, on the way in. A field that is missing or null is absent; one that is there with
+ * the wrong type makes the input unclassifiable, which is a deny: dropping it could change who a call is
+ * decided for (a malformed agent_id would read as the root session).
+ */
+export interface HookInput {
+  hook_event_name: string;
+  session_id?: string;
+  tool_name?: string;
+  tool_use_id?: string;
+  tool_input?: Readonly<Record<string, unknown>>;
+  agent_id?: string;
+  agent_type?: string;
+  permission_mode?: string;
+  reason?: string;
+}
+
+const STRING_FIELDS = ["session_id", "tool_name", "tool_use_id", "agent_id", "agent_type", "permission_mode", "reason"] as const;
+
+/** Check a hook input's fields. Throws UnclassifiedHookError when it names no event or a field has the wrong type. */
+export function parseHookInput(raw: unknown): HookInput {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new UnclassifiedHookError("the hook input is not a JSON object, so it's treated as a tool call and denied");
+  const o = raw as Record<string, unknown>;
+  // An input that doesn't say which hook it is can't be told apart from a tool call: deny it.
+  if (typeof o.hook_event_name !== "string" || o.hook_event_name === "") throw new UnclassifiedHookError("the hook input names no hook event, so it's treated as a tool call and denied");
+  const input: { -readonly [K in keyof HookInput]: HookInput[K] } = { hook_event_name: o.hook_event_name };
+  for (const k of STRING_FIELDS) {
+    const v = o[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string") throw new UnclassifiedHookError(`the hook input's ${k} is not a string, so it's treated as a tool call and denied`);
+    input[k] = v;
+  }
+  const ti = o.tool_input;
+  if (ti !== undefined && ti !== null) {
+    if (typeof ti !== "object" || Array.isArray(ti)) throw new UnclassifiedHookError("the hook input's tool_input is not an object, so it's treated as a tool call and denied");
+    input.tool_input = ti as Record<string, unknown>;
+  }
+  return input;
+}
 
 export interface ShimOptions {
   client: GuardianClient;
@@ -50,7 +90,12 @@ export interface ShimOptions {
 }
 
 /** What the CLI writes to stdout (JSON), or nothing. The CLI always exits 0 with it. */
-export type HookOutput = Json | null;
+export type HookOutput =
+  | { hookSpecificOutput: { hookEventName: "PreToolUse"; permissionDecision: "allow" | "deny"; permissionDecisionReason: string } }
+  | { hookSpecificOutput: { hookEventName: "SubagentStart"; additionalContext: string } }
+  | { decision: "block"; reason: string; hookSpecificOutput: { hookEventName: string; updatedToolOutput: string } }
+  | { systemMessage: string }
+  | null;
 
 export const METHODS_IMPLEMENTED = ["steps/sessionStart", "steps/sessionEnd", "steps/toolCallRequest", "steps/toolCallResult", "steps/subagentStart", "steps/subagentStop"];
 
@@ -78,13 +123,12 @@ const allow = (reason: string): HookOutput => ({ hookSpecificOutput: { hookEvent
 /** The hook input can't be classified. The CLI answers it like any failure on a tool call: deny, exit 2. */
 export class UnclassifiedHookError extends Error {}
 
-export async function runHook(input: Json, o: ShimOptions): Promise<HookOutput> {
-  const event: string = input?.hook_event_name;
-  const ccSession: string = input?.session_id;
-  // An input that doesn't say which hook it is can't be told apart from a tool call: deny it. (A named
-  // event we don't handle isn't a tool call, and returns no opinion.)
-  if (typeof event !== "string" || event === "") throw new UnclassifiedHookError("the hook input names no hook event, so it's treated as a tool call and denied");
-  if (typeof ccSession !== "string") return event === "PreToolUse" ? deny("the hook input has no session id.") : null;
+export async function runHook(raw: unknown, o: ShimOptions): Promise<HookOutput> {
+  const input = parseHookInput(raw);
+  const event = input.hook_event_name;
+  const ccSession = input.session_id;
+  // A named event we don't handle isn't a tool call, and returns no opinion.
+  if (ccSession === undefined) return event === "PreToolUse" ? deny("the hook input has no session id.") : null;
   switch (event) {
     case "PreToolUse": return preToolUse(input, ccSession, o).catch((e) => deny(`no decision could be obtained, so the call is denied (${(e as Error).message}).`));
     case "PostToolUse": return toolResult(input, ccSession, "success", o);
@@ -117,14 +161,14 @@ async function root(ccSession: string, o: ShimOptions): Promise<SessionState> {
   return fresh;
 }
 
-function hello(acs: string, agentId: string, o: ShimOptions): Promise<Json> {
-  return o.client.call(acs, "handshake/hello", {
+function hello(acs: string, agentId: string, o: ShimOptions): Promise<ServerHello> {
+  return o.client.hello(acs, {
     acs_versions_supported: ["0.1.0"],
     methods_implemented: METHODS_IMPLEMENTED,
     transports_supported: ["http"],
     provenance_producer: "none",
     profiles_supported: ["acs-core", "acs-audit"],
-  }, null, { agentId });
+  }, { agentId });
 }
 
 /** The ACS session a speaker uses. A sub-agent with no session was never allowed to start: that throws. */
@@ -142,13 +186,13 @@ function target(s: SessionState, who: Speaker, o: ShimOptions): Target {
  * context died with the restart, so its steps fail. A chain mismatch is answered with this step's deny,
  * and the session is dropped: the root's so the next call starts fresh, a sub-agent's for good.
  */
-async function step(ccSession: string, o: ShimOptions, who: (s: SessionState) => Speaker, method: string, payload: (s: SessionState, t: Target) => Json, after?: (s: SessionState, result: Json, t: Target) => void, requestId?: string): Promise<Json> {
+async function step(ccSession: string, o: ShimOptions, who: (s: SessionState) => Speaker, method: string, payload: (s: SessionState, t: Target) => object, after?: (s: SessionState, result: StepResult, t: Target) => void, requestId?: string): Promise<StepResult> {
   return o.state.locked(ccSession, async () => {
     for (let attempt = 0; ; attempt++) {
       const s = await root(ccSession, o);
       const t = target(s, who(s), o);
       const acs = (s.sessions[t.acs] ??= { chain_hash: null, negotiated: false });
-      let result: Json;
+      let result: StepResult;
       try {
         if (!acs.negotiated) { await hello(t.acs, t.agentId, o); acs.negotiated = true; }
         result = await o.client.call(t.acs, method, payload(s, t), acs.chain_hash, { agentId: t.agentId, ...(requestId ? { requestId } : {}) });
@@ -184,11 +228,11 @@ async function sessionStart(ccSession: string, o: ShimOptions): Promise<HookOutp
 }
 
 /** Claude Code's SessionEnd reasons, in ACS's vocabulary (§ sessionEnd: completed, cancelled, error, timeout, abandoned). */
-function endReason(reason: unknown): string {
+function endReason(reason: string | undefined): string {
   return reason === "prompt_input_exit" || reason === "logout" || reason === "clear" ? "completed" : "abandoned";
 }
 
-async function sessionEnd(ccSession: string, reason: unknown, o: ShimOptions): Promise<HookOutput> {
+async function sessionEnd(ccSession: string, reason: string | undefined, o: ShimOptions): Promise<HookOutput> {
   try {
     await o.state.locked(ccSession, async () => {
       const s = o.state.read(ccSession);
@@ -207,8 +251,9 @@ async function sessionEnd(ccSession: string, reason: unknown, o: ShimOptions): P
 
 // ---- sub-agents
 
-async function decideSpawn(input: Json, ccSession: string, o: ShimOptions): Promise<HookOutput> {
-  const type = typeof input.tool_input?.subagent_type === "string" && input.tool_input.subagent_type ? input.tool_input.subagent_type : DEFAULT_SUBAGENT_TYPE;
+async function decideSpawn(input: HookInput & { tool_use_id: string }, ccSession: string, o: ShimOptions): Promise<HookOutput> {
+  const named = input.tool_input?.subagent_type;
+  const type = typeof named === "string" && named ? named : DEFAULT_SUBAGENT_TYPE;
   const subSession = randomUUID();
   const result = await step(ccSession, o, () => input.agent_id, "steps/subagentStart", (_s, t) => ({
     subagent_session_id: subSession,
@@ -225,16 +270,17 @@ async function decideSpawn(input: Json, ccSession: string, o: ShimOptions): Prom
   return deny(`${result.reasoning ?? `the sub-agent ${type} may not start.`}${codes ? ` [${codes}]` : ""}`);
 }
 
-async function subagentStart(input: Json, ccSession: string, o: ShimOptions): Promise<HookOutput> {
-  const none = { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "VAOM Guardian: this sub-agent was not started through the Guardian, so every tool call it makes will be denied." } };
-  if (typeof input.agent_id !== "string" || typeof input.agent_type !== "string") return none;
+async function subagentStart(input: HookInput, ccSession: string, o: ShimOptions): Promise<HookOutput> {
+  const none: HookOutput = { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "VAOM Guardian: this sub-agent was not started through the Guardian, so every tool call it makes will be denied." } };
+  const { agent_id: agentId, agent_type: agentType } = input;
+  if (agentId === undefined || agentType === undefined) return none;
   try {
     return await o.state.locked(ccSession, async () => {
       const s = o.state.read(ccSession);
-      const i = s ? s.spawns.findIndex((p) => p.agent_type === input.agent_type) : -1;
+      const i = s ? s.spawns.findIndex((p) => p.agent_type === agentType) : -1;
       if (!s || i < 0) return none;
       const [p] = s.spawns.splice(i, 1);
-      s.agents[input.agent_id] = { session: p!.session, agent_type: p!.agent_type, agent_id: p!.agent_id, parent: p!.parent, tool_use_id: p!.tool_use_id };
+      s.agents[agentId] = { session: p!.session, agent_type: p!.agent_type, agent_id: p!.agent_id, parent: p!.parent, tool_use_id: p!.tool_use_id };
       o.state.write(ccSession, s);
       return null;
     });
@@ -262,12 +308,13 @@ async function endSubSession(s: SessionState, sub: string, agentId: string, outc
   }
 }
 
-async function subagentStop(input: Json, ccSession: string, o: ShimOptions): Promise<HookOutput> {
-  if (typeof input.agent_id !== "string") return null;
+async function subagentStop(input: HookInput, ccSession: string, o: ShimOptions): Promise<HookOutput> {
+  const agentId = input.agent_id;
+  if (agentId === undefined) return null;
   try {
     await o.state.locked(ccSession, async () => {
       const s = o.state.read(ccSession);
-      const a = s?.agents[input.agent_id];
+      const a = s?.agents[agentId];
       if (!s || !a) return;
       await endSubSession(s, a.session, a.agent_id, "completed", o).catch(() => undefined);
       o.state.write(ccSession, s);
@@ -278,28 +325,28 @@ async function subagentStop(input: Json, ccSession: string, o: ShimOptions): Pro
 
 // ---- tool calls
 
-function toolCallRequest(input: Json): Json {
+function toolCallRequest(tool: string, ti: HookInput["tool_input"]): ToolCallRequest {
   const args: Record<string, { value: unknown }> = {};
-  const ti = input.tool_input;
-  if (ti && typeof ti === "object" && !Array.isArray(ti)) for (const [k, v] of Object.entries(ti)) args[k] = { value: v };
+  for (const [k, v] of Object.entries(ti ?? {})) args[k] = { value: v };
   return {
-    tool: { name: String(input.tool_name) },
+    tool: { name: tool },
     arguments: args,
-    ...(input.tool_name === "Bash" && typeof ti?.command === "string" ? { raw_command: ti.command } : {}),
+    ...(tool === "Bash" && typeof ti?.command === "string" ? { raw_command: ti.command } : {}),
   };
 }
 
-async function preToolUse(input: Json, ccSession: string, o: ShimOptions): Promise<HookOutput> {
+async function preToolUse(input: HookInput, ccSession: string, o: ShimOptions): Promise<HookOutput> {
   if (input.permission_mode === "bypassPermissions") return deny("bypassPermissions mode is refused: every governed call needs the Guardian's decision.");
-  if (typeof input.tool_name !== "string" || typeof input.tool_use_id !== "string") return deny("the hook input has no tool name or tool_use_id.");
-  if (HOST_INTERNAL_TOOLS.has(input.tool_name)) return allow("host-internal tool, not an action; the tools it loads are decided one by one.");
-  if (SPAWN_TOOLS.has(input.tool_name)) return decideSpawn(input, ccSession, o);
+  const { tool_name: tool, tool_use_id: toolUseId } = input;
+  if (tool === undefined || toolUseId === undefined) return deny("the hook input has no tool name or tool_use_id.");
+  if (HOST_INTERNAL_TOOLS.has(tool)) return allow("host-internal tool, not an action; the tools it loads are decided one by one.");
+  if (SPAWN_TOOLS.has(tool)) return decideSpawn({ ...input, tool_use_id: toolUseId }, ccSession, o);
 
   const requestId = randomUUID();
   let acsSession = "";
-  const result = await step(ccSession, o, () => input.agent_id, "steps/toolCallRequest", () => toolCallRequest(input), (s, r, t) => {
+  const result = await step(ccSession, o, () => input.agent_id, "steps/toolCallRequest", () => toolCallRequest(tool, input.tool_input), (s, r, t) => {
     acsSession = t.acs;
-    if (r.decision === "allow" || r.decision === "ask") s.calls[input.tool_use_id] = { request_id: requestId, tool: input.tool_name, session: t.acs };
+    if (r.decision === "allow" || r.decision === "ask") s.calls[toolUseId] = { request_id: requestId, tool, session: t.acs };
   }, requestId);
 
   const codes = (result.reason_codes ?? []).join(", ");
@@ -317,7 +364,7 @@ async function preToolUse(input: Json, ccSession: string, o: ShimOptions): Promi
   }
 }
 
-async function awaitApproval(acsSession: string, requestId: string, result: Json, o: ShimOptions): Promise<HookOutput> {
+async function awaitApproval(acsSession: string, requestId: string, result: StepResult, o: ShimOptions): Promise<HookOutput> {
   const now = o.now ?? Date.now;
   const who = result.ask_details?.approver?.id ?? "an approver";
   for (;;) {
@@ -331,22 +378,23 @@ async function awaitApproval(acsSession: string, requestId: string, result: Json
   }
 }
 
-async function toolResult(input: Json, ccSession: string, exit: "success" | "failure", o: ShimOptions): Promise<HookOutput> {
-  if (typeof input.tool_use_id !== "string" || typeof input.tool_name !== "string" || HOST_INTERNAL_TOOLS.has(input.tool_name)) return null;
-  if (SPAWN_TOOLS.has(input.tool_name)) return spawnFinished(input, ccSession, o);
+async function toolResult(input: HookInput, ccSession: string, exit: "success" | "failure", o: ShimOptions): Promise<HookOutput> {
+  const { tool_name: tool, tool_use_id: toolUseId, agent_id: agentId } = input;
+  if (toolUseId === undefined || tool === undefined || HOST_INTERNAL_TOOLS.has(tool)) return null;
+  if (SPAWN_TOOLS.has(tool)) return spawnFinished(toolUseId, ccSession, o);
   try {
     let linked = true;
     const result = await step(ccSession, o, (s) => {
       // The session the call was decided on; a call with no decision is reported on the session of whoever
       // made it, or the root if that sub-agent has none.
-      const call = s.calls[input.tool_use_id];
+      const call = s.calls[toolUseId];
       if (call) return Object.entries(s.agents).find(([, a]) => a.session === call.session)?.[0];
-      return typeof input.agent_id === "string" && s.agents[input.agent_id] ? input.agent_id : undefined;
-    }, "steps/toolCallResult", (s) => {
-      const call = s.calls[input.tool_use_id];
+      return agentId !== undefined && s.agents[agentId] ? agentId : undefined;
+    }, "steps/toolCallResult", (s): ToolCallResult => {
+      const call = s.calls[toolUseId];
       linked = call !== undefined;
-      return { tool: { name: input.tool_name }, ...(call ? { request_id_ref: call.request_id } : {}), exit_status: exit, outputs: [] };
-    }, (s) => { delete s.calls[input.tool_use_id]; });
+      return { tool: { name: tool }, ...(call ? { request_id_ref: call.request_id } : {}), exit_status: exit, outputs: [] };
+    }, (s) => { delete s.calls[toolUseId]; });
     if (result.decision === "allow") return null;
     const why = linked ? (result.reasoning ?? "the Guardian refused this result.") : "this call ran without a Guardian decision on record; it has been reported.";
     // The output is withheld from the model as well as flagged: an ask that ran without its approval
@@ -361,11 +409,11 @@ async function toolResult(input: Json, ccSession: string, exit: "success" | "fai
 
 /** The Agent call returned. A spawn it was allowed but that never started is ended, so it stops holding a
  *  place in the parent's fan-out. */
-async function spawnFinished(input: Json, ccSession: string, o: ShimOptions): Promise<HookOutput> {
+async function spawnFinished(toolUseId: string, ccSession: string, o: ShimOptions): Promise<HookOutput> {
   try {
     await o.state.locked(ccSession, async () => {
       const s = o.state.read(ccSession);
-      const p = s?.spawns.find((x) => x.tool_use_id === input.tool_use_id);
+      const p = s?.spawns.find((x) => x.tool_use_id === toolUseId);
       if (!s || !p) return;
       await endSubSession(s, p.session, p.agent_id, "failed", o).catch(() => undefined);
       o.state.write(ccSession, s);

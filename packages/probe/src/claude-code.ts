@@ -58,21 +58,22 @@ export function observe(transcript: string, refusal?: string): Observation {
   const errors = new Map<string, string>(); // tool_use id -> error text
   const deniedIds = new Set<string>();
   for (const line of transcript.split(/\r?\n/)) {
-    let m: any;
-    try { m = JSON.parse(line); } catch { continue; }
-    if (m?.type === "system" && m.subtype === "init") {
-      manifest = Array.isArray(m.tools) ? m.tools.filter((t: unknown) => typeof t === "string") : [];
+    let m: Loose;
+    try { m = loose(JSON.parse(line)); } catch { continue; }
+    if (m.type === "system" && m.subtype === "init") {
+      manifest = Array.isArray(m.tools) ? m.tools.filter((t: unknown): t is string => typeof t === "string") : [];
       if (typeof m.claude_code_version === "string") host.version = m.claude_code_version;
       if (typeof m.model === "string") host.model = m.model;
     }
-    for (const c of (Array.isArray(m?.message?.content) ? m.message.content : []) as any[]) {
-      if (m.type === "assistant" && c?.type === "tool_use" && typeof c.name === "string" && typeof c.id === "string") uses.set(c.id, c.name);
-      if (m.type === "user" && c?.type === "tool_result" && c.is_error === true && typeof c.tool_use_id === "string") errors.set(c.tool_use_id, text(c.content));
+    const content = loose(m.message).content;
+    for (const c of (Array.isArray(content) ? content : []).map(loose)) {
+      if (m.type === "assistant" && c.type === "tool_use" && typeof c.name === "string" && typeof c.id === "string") uses.set(c.id, c.name);
+      if (m.type === "user" && c.type === "tool_result" && c.is_error === true && typeof c.tool_use_id === "string") errors.set(c.tool_use_id, text(c.content));
     }
-    if (m?.type === "result") finished = true;
+    if (m.type === "result") finished = true;
     // A denial without a tool_use_id can't be matched to a call, so it counts for none: under-reporting a
     // hold is safe, crediting one to the wrong call isn't.
-    for (const d of (Array.isArray(m?.permission_denials) ? m.permission_denials : []) as any[]) if (typeof d?.tool_use_id === "string") deniedIds.add(d.tool_use_id);
+    for (const d of (Array.isArray(m.permission_denials) ? m.permission_denials : []).map(loose)) if (typeof d.tool_use_id === "string") deniedIds.add(d.tool_use_id);
   }
   const byGuardian = (id: string) => deniedIds.has(id) && (errors.get(id) ?? "").includes(GUARDIAN_DENIAL);
   const byTool = new Map<string, string[]>();
@@ -171,3 +172,7 @@ export async function runProbe(set: ProbeSet, probe: ProbeDef, o: RunOptions): P
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/** A line of Claude Code's stream output, which has no published schema: every field is unknown until checked. */
+type Loose = Readonly<Record<string, unknown>>;
+const loose = (v: unknown): Loose => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Loose) : {});

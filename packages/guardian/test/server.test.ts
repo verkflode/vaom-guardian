@@ -447,6 +447,16 @@ describe("HTTP boundary", () => {
     expect((await http(port, "POST", "/acs", { host: `evil.example:${port}`, body: {} })).status).toBe(421);
     expect((await http(port, "GET", "/acs", { host: `127.0.0.1:${port}` })).status).toBe(405);
   });
+  it("request bodies are checked before anything reads them: a field that isn't a string is a 400", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    const origin = `http://localhost:${port}`;
+    expect((await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/approve`, { origin, body: { credentialId: 5, authenticatorData: "", clientDataJSON: "", signature: "" } })).status).toBe(400);
+    expect((await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/approve`, { origin, body: [] })).status).toBe(400);
+    expect((await http(port, "POST", "/api/enroll/options", { origin, body: {} })).status).toBe(400);
+    expect((await http(port, "POST", "/api/enroll", { origin, body: { token: "t", registration: { attestationObject: 1 } } })).status).toBe(400);
+  });
   it("the shim's poll needs a fresh, valid signature", async () => {
     const { g, port } = await start();
     const call = await session(g, port);

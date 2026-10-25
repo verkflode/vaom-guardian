@@ -57,17 +57,19 @@ const raw = await new Promise<string>((res, rej) => {
   process.stdin.on("end", () => res(Buffer.concat(chunks).toString("utf8")));
   process.stdin.on("error", rej);
 });
-let input: any;
+let input: unknown;
 try { input = JSON.parse(raw); } catch { fatal("the hook input is not JSON"); }
-// Anything but a named event is answered as a tool call would be on failure: deny, exit 2.
-event = typeof input?.hook_event_name === "string" ? input.hook_event_name : "";
+// Read only to name the failure; runHook checks the whole input. Anything but a named event is answered as
+// a tool call would be on failure: deny, exit 2.
+const fields = (typeof input === "object" && input !== null ? input : {}) as { hook_event_name?: unknown; session_id?: unknown };
+event = typeof fields.hook_event_name === "string" ? fields.hook_event_name : "";
 
 let out;
 try {
   const config = readConfig(guardianPath);
   const secrets = loadSecrets(join(config.dataDir, "secrets.json"), false);
   const state = new StateDir(stateDir);
-  const ccSession = typeof input?.session_id === "string" ? input.session_id : "unknown";
+  const ccSession = typeof fields.session_id === "string" ? fields.session_id : "unknown";
   const client = new GuardianClient({ port: config.port, ikm: secrets.ikm, keyId: secrets.keyId, agentId: values.agent, requestTimeoutMs: 10_000, onFailure: (f) => state.recordFailure(ccSession, f) });
   out = await runHook(input, { client, state, deadline, approvalsUrl: `http://localhost:${config.port}/` });
 } catch (e) {

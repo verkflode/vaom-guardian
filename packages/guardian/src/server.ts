@@ -58,6 +58,14 @@ const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
+/** A request body's named fields, each checked to be a string, or a 400: nothing reads an unchecked body. */
+function strings<K extends string>(input: unknown, keys: readonly K[]): Record<K, string> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) throw new HttpError(400, "the body must be a JSON object");
+  const o = input as Record<string, unknown>;
+  for (const k of keys) if (typeof o[k] !== "string") throw new HttpError(400, `${k} must be a string`);
+  return o as Record<K, string>;
+}
+
 function send(res: ServerResponse, status: number, type: string, payload: string): void {
   res.writeHead(status, { ...SECURITY_HEADERS, "Content-Type": type, "Content-Length": Buffer.byteLength(payload) });
   res.end(payload);
@@ -134,7 +142,7 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
     if (req.method !== "POST") throw new HttpError(405, "method not allowed");
     if (req.headers.origin !== g.origin) throw new HttpError(403, "cross-origin request refused");
     if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) throw new HttpError(415, "JSON only");
-    let input: any;
+    let input: unknown;
     try { input = JSON.parse(await body(req)); } catch (e) { if (e instanceof HttpError) throw e; throw new HttpError(400, "body is not JSON"); }
 
     const a = /^\/api\/asks\/([^/]+)\/([^/]+)\/(challenge|approve|reject)$/.exec(p);
@@ -143,15 +151,20 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
       if (action === "challenge") return json(res, 200, g.approvals.challenge(session, requestId, now()));
       // A planted case is revealed only once decided, so the reviewer learns from it.
       if (action === "approve") {
-        const ev = g.approvals.approve(session, requestId, input, now());
+        const ev = g.approvals.approve(session, requestId, strings(input, ["credentialId", "authenticatorData", "clientDataJSON", "signature"]), now());
         const seededError = g.approvals.revealed(session, requestId);
         return json(res, 200, { status: "approved", approval: ev.id, ...(seededError ? { seeded: { error: seededError } } : {}) });
       }
       const r = g.approvals.reject(session, requestId, now());
       return json(res, 200, { status: "rejected", ...(r.seededError ? { seeded: { error: r.seededError } } : {}) });
     }
-    if (p === "/api/enroll/options") return json(res, 200, g.approvals.enrollmentOptions(input?.token, now()));
-    if (p === "/api/enroll") { const ev = g.approvals.completeEnrollment(input?.token, input?.registration, now()); return json(res, 200, { enrolled: ev.credential_id, roles: ev.roles }); }
+    if (p === "/api/enroll/options") return json(res, 200, g.approvals.enrollmentOptions(strings(input, ["token"]).token, now()));
+    if (p === "/api/enroll") {
+      const { token } = strings(input, ["token"]);
+      const registration = strings((input as { registration?: unknown }).registration, ["attestationObject", "clientDataJSON"]);
+      const ev = g.approvals.completeEnrollment(token, registration, now());
+      return json(res, 200, { enrolled: ev.credential_id, roles: ev.roles });
+    }
     throw new HttpError(404, "not found");
   }
 
@@ -159,9 +172,7 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
   function acs(raw: string): unknown {
     const t = now();
     const h = g.endpoint.handle(raw, t);
-    let env: any = null;
-    try { env = JSON.parse(raw); } catch { /* the endpoint already answered PARSE */ }
-    const session: string = env?.params?.metadata?.session_id ?? "";
+    const session = h.request?.params.metadata.session_id ?? "";
     try {
       const ts = new Date(t).toISOString();
       g.store.commit({
@@ -176,9 +187,9 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
       return g.endpoint.persistFailed(h, session);
     }
     const r = h.records[0];
-    if (env?.method === "steps/toolCallRequest" && r && !r.resolution && (r.decision.outcome === "review" || r.decision.outcome === "escalate") && h.response?.result?.decision === "ask") {
-      const args = Object.fromEntries(Object.entries(env.params.payload.arguments ?? {}).map(([k, v]: [string, any]) => [k, v?.value]));
-      g.approvals.add(r, { tool: env.params.payload.tool.name, arguments: args }, session, env.params.request_id, t);
+    const asked = h.response?.result !== undefined && "decision" in h.response.result && h.response.result.decision === "ask";
+    if (h.call && h.request && r && !r.resolution && (r.decision.outcome === "review" || r.decision.outcome === "escalate") && asked) {
+      g.approvals.add(r, { tool: h.call.tool, arguments: h.call.arguments }, session, h.request.params.request_id, t);
     }
     return h.response;
   }

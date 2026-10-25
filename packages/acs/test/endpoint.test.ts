@@ -69,12 +69,17 @@ function send(s: Setup, method: string, payload: unknown, o: Parameters<typeof e
   const env = signed(envelope(method, payload, o), o.session ?? S1);
   const h = s.ep.handle(JSON.stringify(env), o.now ?? o.at ?? T0);
   s.entries.push(...h.entries);
-  if (h.response.result && method !== "system/ping") {
-    if (method !== "handshake/hello") expect(validateResponseEnvelope(h.response), JSON.stringify(validateResponseEnvelope.errors)).toBe(true);
-    if (h.response.result.signature) expect(verify(h.response, sessionKey(IKM, o.session ?? S1))).toEqual({ ok: true });
+  // Tests read the response by path and let their assertions check it.
+  const response: any = h.response;
+  if (response.result && method !== "system/ping") {
+    if (method !== "handshake/hello") expect(validateResponseEnvelope(response), JSON.stringify(validateResponseEnvelope.errors)).toBe(true);
+    if (response.result.signature) expect(verify(response, sessionKey(IKM, o.session ?? S1))).toEqual({ ok: true });
   }
-  return { ...h, env, result: h.response.result, error: h.response.error };
+  return { ...h, response, env, result: response.result, error: response.error };
 }
+
+/** The response to a raw request, read by path in the assertions. */
+const answer = (ep: Setup["ep"], raw: unknown): any => ep.handle(raw, T0).response;
 
 const hello = { acs_versions_supported: ["0.1.0"], methods_implemented: ["steps/sessionStart", "steps/toolCallRequest", "steps/toolCallResult", "steps/subagentStart", "steps/sessionEnd"], transports_supported: ["http"], provenance_producer: "none", profiles_supported: ["acs-core", "acs-audit"] };
 const tool = (name: string, args: Record<string, unknown>) => ({ tool: { name }, arguments: Object.fromEntries(Object.entries(args).map(([k, v]) => [k, { value: v }])) });
@@ -110,30 +115,30 @@ describe("handshake", () => {
 describe("transport checks fail closed", () => {
   it("rejects non-JSON, batches and envelopes that fail the schema", () => {
     const s = setup();
-    expect(s.ep.handle("{nope", T0).response.error.code).toBe(ERR.PARSE);
-    expect(s.ep.handle("[]", T0).response.error.code).toBe(ERR.INVALID_REQUEST);
-    const bad = s.ep.handle({ jsonrpc: "2.0", id: 5, method: "steps/toolCallRequest", params: {} }, T0).response;
+    expect(answer(s.ep, "{nope").error.code).toBe(ERR.PARSE);
+    expect(answer(s.ep, "[]").error.code).toBe(ERR.INVALID_REQUEST);
+    const bad = answer(s.ep, { jsonrpc: "2.0", id: 5, method: "steps/toolCallRequest", params: {} });
     expect(bad).toMatchObject({ id: 5, error: { code: ERR.INVALID_REQUEST } });
   });
   it("rejects unsigned, wrongly keyed and tampered requests", () => {
     const s = started();
     const raw = envelope("steps/toolCallRequest", restart("INC-7"));
-    expect(s.ep.handle(raw, T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
-    expect(s.ep.handle(sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, SUB), "guardian-1"), T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
+    expect(answer(s.ep, raw).error.code).toBe(ERR.SIGNATURE_INVALID);
+    expect(answer(s.ep, sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, SUB), "guardian-1")).error.code).toBe(ERR.SIGNATURE_INVALID);
     const t = signed(envelope("steps/toolCallRequest", restart("INC-7")));
     (t.params.payload as any).arguments.stateless.value = false;
-    expect(s.ep.handle(t, T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
+    expect(answer(s.ep, t).error.code).toBe(ERR.SIGNATURE_INVALID);
   });
   it("rejects a key_id it doesn't hold, unsigned, without trying its own secret", () => {
     const s = started();
-    const r = s.ep.handle(sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, S1), "guardian-2"), T0).response;
+    const r = answer(s.ep, sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, S1), "guardian-2"));
     expect(r.error.code).toBe(ERR.SIGNATURE_INVALID);
     expect(r.error.message).toMatch(/key_id/);
     expect(r.result).toBeUndefined();
   });
   it("signs its answer under the key_id the request named", () => {
     const s = started();
-    expect(s.ep.handle(signed(envelope("steps/toolCallRequest", restart("INC-7"))), T0).response.result.signature.key_id).toBe("guardian-1");
+    expect(answer(s.ep, signed(envelope("steps/toolCallRequest", restart("INC-7")))).result.signature.key_id).toBe("guardian-1");
   });
   it("a forged request doesn't burn its request id", () => {
     const s = started();
@@ -144,8 +149,8 @@ describe("transport checks fail closed", () => {
   it("rejects replays and stale timestamps", () => {
     const s = started();
     const env = signed(envelope("steps/toolCallRequest", restart("INC-7")));
-    expect(s.ep.handle(env, T0).response.result).toBeDefined();
-    expect(s.ep.handle(env, T0).response.error.code).toBe(ERR.REPLAY_DETECTED);
+    expect(answer(s.ep, env).result).toBeDefined();
+    expect(answer(s.ep, env).error.code).toBe(ERR.REPLAY_DETECTED);
     expect(send(s, "steps/toolCallRequest", restart("INC-7"), { at: T0 - 61_000, now: T0 }).error.code).toBe(ERR.TIMESTAMP_OUT_OF_WINDOW);
     expect(send(s, "steps/toolCallRequest", restart("INC-7"), { at: T0 + 61_000, now: T0 }).error.code).toBe(ERR.TIMESTAMP_OUT_OF_WINDOW);
   });
@@ -153,7 +158,7 @@ describe("transport checks fail closed", () => {
     const s = started();
     const env = envelope("steps/toolCallRequest", restart("INC-7"));
     env.params.acs_version = "0.2.0";
-    expect(s.ep.handle(signed(env), T0).response.error.code).toBe(ERR.UNSUPPORTED_VERSION);
+    expect(answer(s.ep, signed(env)).error.code).toBe(ERR.UNSUPPORTED_VERSION);
     expect(send(s, "steps/toolCallRequest", restart("INC-7"), { agent: "someone-else" }).error.code).toBe(ERR.SESSION_REFUSED);
   });
   it("answers methods it doesn't evaluate with an error, not allow: wrapped MCP, memory, skills", () => {
@@ -167,14 +172,14 @@ describe("transport checks fail closed", () => {
   it("answers system/ping without a session or signature, with §13's payload, outside the chain", () => {
     const s = started();
     const before = s.ep.head(S1);
-    const h = s.ep.handle(envelope("system/ping", { echo: "hi" }), T0);
+    const h: any = s.ep.handle(envelope("system/ping", { echo: "hi" }), T0);
     expect(h.response.result).toMatchObject({ decision: "allow", payload: { status: "ok", echo: "hi", server_timestamp: new Date(T0).toISOString() } });
     expect(h.response.result.signature).toBeUndefined();
     expect(h.entries).toEqual([]);
     expect(s.ep.head(S1)).toBe(before);
   });
   it("checks a ping's ACS version first", () => {
-    expect(setup().ep.handle(envelope("system/ping", {}, { version: "0.2.0" }), T0).response.error.code).toBe(ERR.UNSUPPORTED_VERSION);
+    expect(answer(setup().ep, envelope("system/ping", {}, { version: "0.2.0" })).error.code).toBe(ERR.UNSUPPORTED_VERSION);
   });
 });
 
@@ -282,7 +287,7 @@ describe("results resolve decisions", () => {
     const s = started({}, true);
     const req = send(s, "steps/toolCallRequest", restart("INC-7"));
     const out = s.ep.persistFailed(req, S1);
-    expect(out.error.code).toBe(ERR.INTERNAL);
+    expect(out.error?.code).toBe(ERR.INTERNAL);
     expect(() => s.ep.close(S1, req.env.params.request_id, "withdrawn", "2026-10-05T10:01:00Z")).toThrow(/no pending/);
   });
 });

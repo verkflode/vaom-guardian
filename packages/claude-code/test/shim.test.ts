@@ -8,7 +8,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGuardian, createGuardianServer, readConfig, Store, verifyEvidence, type Guardian } from "@verkflode/vaom-guardian-server";
 import { SoftAuthenticator } from "../../guardian/test/authenticator.ts";
-import { GuardianClient, runHook, StateDir, type FailureEntry, type ShimOptions } from "../src/index.ts";
+import { GuardianClient, runHook as run, StateDir, UnclassifiedHookError, type FailureEntry, type ShimOptions } from "../src/index.ts";
+
+/** The hook's answer, read by path in the assertions. */
+const runHook = (input: unknown, o: ShimOptions): Promise<any> => run(input, o);
 import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
@@ -212,6 +215,27 @@ describe("PreToolUse decisions", () => {
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/key_id/);
   });
 
+  it("denies a correctly signed answer that isn't an ACS response", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    await runHook({ hook_event_name: "SessionStart", session_id: CC, source: "startup" }, o);
+    await r.stop();
+    // The right key and key_id, but a decision ACS doesn't have: only the response schema catches it.
+    const impostor = createServer((req, res) => {
+      let s = ""; req.on("data", (c) => (s += c)); req.on("end", () => {
+        const env = JSON.parse(s);
+        const answer = { jsonrpc: "2.0", id: env.id, result: { type: "final", acs_version: "0.1.0", request_id: env.params.request_id, decision: "allow-all", chain_hash: "0".repeat(64) } };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(sign(answer, sessionKey(r.g.secrets.ikm, env.params.metadata.session_id), r.g.secrets.keyId)));
+      });
+    });
+    await new Promise<void>((res) => impostor.listen(r.port, "127.0.0.1", () => res()));
+    cleanup.push(() => impostor.close());
+    const out = await runHook(pre("mcp__telemetry__query", { query: "x" }), o);
+    expect(decision(out)).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/ACS response schema/);
+  });
+
   it("records every decision failure in its own audit log, and counts them per class at SessionEnd (§6.4)", async () => {
     const r = await guardian();
     const state = new StateDir(join(r.dir, "shim"));
@@ -301,6 +325,21 @@ describe("asks: the Guardian is the approver", () => {
     const out = await runHook(restart(), shim(r, { deadline: Date.now() + 7_000 }));
     expect(decision(out)).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/before the hook's deadline/);
+  });
+});
+
+describe("hook input fields are checked on the way in", () => {
+  it("a field with the wrong type makes the input unclassifiable, so the call is denied", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    await expect(run(pre("mcp__telemetry__query", { query: "x" }, { agent_id: 5 }), o)).rejects.toThrow(UnclassifiedHookError);
+    await expect(run(pre("mcp__telemetry__query", "x" as unknown as Record<string, unknown>), o)).rejects.toThrow(/tool_input/);
+    await expect(run([], o)).rejects.toThrow(UnclassifiedHookError);
+  });
+  it("a null field is absent", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    expect(decision(await runHook(pre("mcp__telemetry__query", { query: "x" }, { agent_id: null }), o))).toBe("allow");
   });
 });
 

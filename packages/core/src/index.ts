@@ -6,6 +6,8 @@ export { lintScoring, SCORING_FORMAT } from "./lint/scoring.ts";
 export { lintSeeds, SEEDS_FORMAT } from "./lint/seeds.ts";
 export { score, capLevel, type DimensionScore, type History, type Level, type ScoreInput, type ScoreResult } from "./scoring/score.ts";
 export type { Finding, LintResult, Severity } from "./lint/types.ts";
+// Document types derived from the schemas (scripts/gen-validators.mjs): what a document is once it validates.
+export type { Binding01, Decision03, Decision04, Matrix01, Matrix02, ProbeResult01, Probes01, Scoring01, Seeds01 } from "./generated/types.ts";
 export { compilePolicy, evaluate } from "./eval/evaluate.ts";
 export type { Band, Call, CapUsage, CompileResult, Decision, EvalContext, FactValue, Money, Outcome, Placement, PlacementScore, Policy, Reason, Reservation } from "./eval/types.ts";
 export { buildRecord, checkRecord, resolveRecord, RecordError, RECORD_FORMAT } from "./record/record.ts";

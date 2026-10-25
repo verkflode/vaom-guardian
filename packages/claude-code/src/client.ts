@@ -4,9 +4,7 @@
 // to onFailure, so the deployment can record it in its own audit log and count it at sessionEnd.
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { request } from "node:http";
-import { ACS_SPEC_VERSION, acceptsVersion, sessionKey, sign, verify } from "@verkflode/vaom-guardian-acs";
-
-type Json = any;
+import { ACS_SPEC_VERSION, acceptsVersion, sessionKey, sign, validateResponseEnvelope, verify, type AcsResult, type ClientHello, type ServerHello } from "@verkflode/vaom-guardian-acs";
 
 /** The Guardian answered with a JSON-RPC error: a decision failure, which this shim treats as deny. */
 export class GuardianError extends Error {
@@ -28,6 +26,9 @@ export class DecisionFailure extends Error {
     this.failureClass = failureClass;
   }
 }
+
+/** A step's result as the shim acts on it: checked, signed, and carrying the new chain head. */
+export type StepResult = AcsResult & { chain_hash: string };
 
 export interface FailureReport { method: string; session: string; failureClass: FailureClass; detail: string }
 
@@ -51,7 +52,7 @@ export interface ClientConfig {
   onFailure?: (f: FailureReport) => void;
 }
 
-function http(port: number, method: "GET" | "POST", path: string, headers: Record<string, string>, body: string | undefined, timeoutMs: number): Promise<{ status: number; json: Json }> {
+function http(port: number, method: "GET" | "POST", path: string, headers: Record<string, string>, body: string | undefined, timeoutMs: number): Promise<{ status: number; json: unknown }> {
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, method, path, agent: false, headers: { host: `127.0.0.1:${port}`, ...headers, ...(body !== undefined ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) } : {}) }, timeout: timeoutMs }, (res) => {
       const chunks: Buffer[] = [];
@@ -76,19 +77,31 @@ export class GuardianClient {
     this.cfg = cfg;
   }
 
-  /**
-   * One ACS request. Returns the result, after checking that it answers this request and, for every step
-   * but the handshake, that it carries the Guardian's signature under this session's key. The ACS v0.1
-   * handshake answer is unsigned (§4), so nothing in it widens what the shim does: the shim applies deny
-   * on failure whatever the Guardian declares.
-   */
   /** The agent id this shim speaks as. A sub-agent speaks as "{agentId}/{sub-agent type}". */
   get agentId(): string {
     return this.cfg.agentId;
   }
 
-  async call(session: string, method: string, payload: Json, chainHash: string | null, o: { requestId?: string; agentId?: string } = {}): Promise<Json> {
-    return this.reporting(method, session, () => this.request(session, method, payload, chainHash, o));
+  /** Negotiate a session (handshake/hello). The ACS v0.1 handshake answer is unsigned (§4), so nothing in
+   *  it widens what the shim does: the shim applies deny on failure whatever the Guardian declares. */
+  async hello(session: string, payload: ClientHello, o: { agentId?: string } = {}): Promise<ServerHello> {
+    return this.reporting("handshake/hello", session, async () => {
+      const result = await this.request(session, "handshake/hello", payload, null, o);
+      if (!isServerHello(result) || !acceptsVersion(result.negotiated_version)) throw new DecisionFailure("handshake_failure", "the Guardian negotiated a version this shim doesn't speak");
+      return result;
+    });
+  }
+
+  /** One ACS step. Returns its result once it is checked to answer this request, under the Guardian's
+   *  signature with this session's key, carrying a chain hash. */
+  async call(session: string, method: string, payload: object, chainHash: string | null, o: { requestId?: string; agentId?: string } = {}): Promise<StepResult> {
+    return this.reporting(method, session, async () => {
+      if (method === "handshake/hello") throw new DecisionFailure("other", "handshake/hello goes through hello()");
+      const result = await this.request(session, method, payload, chainHash, o);
+      if (isServerHello(result)) throw new DecisionFailure("malformed_response", "the Guardian answered a step with a handshake");
+      if (typeof result.chain_hash !== "string") throw new DecisionFailure("malformed_response", "the Guardian's answer carries no chain hash");
+      return { ...result, chain_hash: result.chain_hash };
+    });
   }
 
   /** Run a request, telling onFailure of any throw before passing it on. */
@@ -101,7 +114,9 @@ export class GuardianClient {
     }
   }
 
-  private async request(session: string, method: string, payload: Json, chainHash: string | null, o: { requestId?: string; agentId?: string }): Promise<Json> {
+  /** Send one request; return its result once the answer is the ACS response schema's, for this request, and
+   *  (for every step but the handshake) signed under this session's key with a chain hash. */
+  private async request(session: string, method: string, payload: object, chainHash: string | null, o: { requestId?: string; agentId?: string }): Promise<AcsResult | ServerHello> {
     const requestId = o.requestId ?? randomUUID();
     const key = sessionKey(this.cfg.ikm, session);
     const env = sign({
@@ -114,18 +129,17 @@ export class GuardianClient {
     }, key, this.cfg.keyId);
     const r = await http(this.cfg.port, "POST", "/acs", {}, JSON.stringify(env), this.cfg.requestTimeoutMs);
     const res = r.json;
-    if (res?.error) throw new GuardianError(Number(res.error.code), String(res.error.message ?? "error"));
-    if (r.status !== 200 || res?.jsonrpc !== "2.0" || res.id !== env.id || !res.result) throw new DecisionFailure("malformed_response", `unexpected answer from the Guardian (HTTP ${r.status})`);
+    const error = (res as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+    if (error) throw new GuardianError(Number(error.code), String(error.message ?? "error"));
+    if (!validateResponseEnvelope(res)) throw new DecisionFailure("malformed_response", `the Guardian's answer fails the ACS response schema (HTTP ${r.status})`);
+    if (r.status !== 200 || res.id !== env.id || !res.result) throw new DecisionFailure("malformed_response", `unexpected answer from the Guardian (HTTP ${r.status})`);
     const result = res.result;
-    if (method === "handshake/hello") {
-      if (typeof result.negotiated_version !== "string" || !acceptsVersion(result.negotiated_version)) throw new DecisionFailure("handshake_failure", "the Guardian negotiated a version this shim doesn't speak");
-      return result;
-    }
+    if (method === "handshake/hello") return result;
+    if (isServerHello(result)) throw new DecisionFailure("malformed_response", "the Guardian answered a step with a handshake");
     if (result.signature && result.signature.key_id !== this.cfg.keyId) throw new DecisionFailure("signature_invalid", "the Guardian's answer is signed under a different key_id");
     const v = verify(res, key);
     if (!v.ok) throw new DecisionFailure("signature_invalid", `the Guardian's answer fails its signature check: ${v.why}`);
     if (result.request_id !== requestId) throw new DecisionFailure("malformed_response", "the Guardian's answer is for a different request");
-    if (typeof result.chain_hash !== "string") throw new DecisionFailure("malformed_response", "the Guardian's answer carries no chain hash");
     return result;
   }
 
@@ -140,10 +154,16 @@ export class GuardianClient {
     const key = sessionKey(this.cfg.ikm, session);
     const mac = (s: string) => createHmac("sha256", key).update(s).digest();
     const r = await http(this.cfg.port, "GET", `${path}?wait=${waitSeconds}`, { "x-vaom-timestamp": ts, "x-vaom-signature": mac(`GET ${path} ${ts}`).toString("base64") }, undefined, (waitSeconds + 10) * 1000);
-    const status = r.json?.status;
+    const answer = r.json as { status?: unknown; signature?: unknown } | null;
+    const status = answer?.status;
     if (r.status !== 200 || typeof status !== "string") throw new DecisionFailure("malformed_response", `approval status unavailable (HTTP ${r.status})`);
-    const got = Buffer.from(String(r.json.signature ?? ""), "base64"), want = mac(`STATUS ${path} ${status} ${ts}`);
+    const got = Buffer.from(String(answer?.signature ?? ""), "base64"), want = mac(`STATUS ${path} ${status} ${ts}`);
     if (got.length !== want.length || !timingSafeEqual(got, want)) throw new DecisionFailure("signature_invalid", "the approval status fails its signature check");
     return status;
   }
+}
+
+/** A handshake answer has a negotiated version; a step's result has a decision (ACS says the two share no required field). */
+function isServerHello(r: AcsResult | ServerHello): r is ServerHello {
+  return typeof (r as { negotiated_version?: unknown }).negotiated_version === "string" && !("decision" in r);
 }

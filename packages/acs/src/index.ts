@@ -8,4 +8,7 @@ export { ReplayGuard } from "./replay.ts";
 export { Chain, entryHash, requestHash, verifyChain, type ContextEntry, type EntryFields } from "./chain.ts";
 export { negotiate, PROFILES, type GuardianConfig } from "./handshake.ts";
 export { toCall, toResult, type ResultInput, type ResultOptions } from "./translate.ts";
+// Wire types derived from the vendored ACS schemas (scripts/gen-validators.mjs).
+export { validateResponseEnvelope } from "./generated/validators.js";
+export type { AcsResult, ClientHello, RequestEnvelope, ResponseEnvelope, ServerHello, SessionEnd, SessionStart, SubagentStart, ToolCallRequest, ToolCallResult } from "./generated/types.ts";
 export { AcsEndpoint, OBSERVED_STEPS, type EndpointConfig, type EndpointDeps, type Handled, type Incident, type Spawn } from "./endpoint.ts";

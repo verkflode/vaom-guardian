@@ -9,14 +9,19 @@ export const HMAC_SHA256 = "HMAC-SHA256";
 
 export interface Signature { algorithm: string; value: string; key_id: string }
 
-type Envelope = { params?: { signature?: Signature } & Record<string, unknown>; result?: { signature?: Signature } & Record<string, unknown> } & Record<string, unknown>;
+/** Any JSON-RPC envelope: a request carries its signature in params, a response in result. */
+type Envelope = { params?: object; result?: object };
+
+function signatureOf(part: object | undefined): Signature | undefined {
+  return (part as { signature?: Signature } | undefined)?.signature;
+}
 
 function withoutSignature(env: Envelope): unknown {
   const copy: Record<string, unknown> = { ...env };
   for (const part of ["params", "result"] as const) {
     const inner = env[part];
     if (inner && typeof inner === "object") {
-      const { signature: _sig, ...rest } = inner;
+      const { signature: _sig, ...rest } = inner as { signature?: Signature };
       copy[part] = rest;
     }
   }
@@ -38,7 +43,7 @@ export function sign<E extends Envelope>(env: E, key: Uint8Array, keyId: string)
 export type Verified = { ok: true } | { ok: false; why: string };
 
 export function verify(env: Envelope, key: Uint8Array): Verified {
-  const sig = env.params?.signature ?? env.result?.signature;
+  const sig = signatureOf(env.params) ?? signatureOf(env.result);
   if (!sig) return { ok: false, why: "signature missing" };
   if (sig.algorithm !== HMAC_SHA256) return { ok: false, why: `algorithm ${sig.algorithm} not negotiated` };
   const got = fromBase64(sig.value);

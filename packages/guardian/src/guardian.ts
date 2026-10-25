@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { AcsEndpoint, PROFILES } from "@verkflode/vaom-guardian-acs";
-import { CapLedger, compilePolicy, ContextRegistry, lintMatrix, lintSeeds, resolveRecord, type Policy } from "@verkflode/vaom-guardian-core";
+import { CapLedger, compilePolicy, ContextRegistry, lintMatrix, lintSeeds, resolveRecord, type Matrix01, type Matrix02, type Policy } from "@verkflode/vaom-guardian-core";
 import { Seeder, type SeedSet } from "./seeding.ts";
 import { Approvals } from "./approvals.ts";
 import { loadSecrets, type Secrets } from "./secrets.ts";
@@ -33,23 +33,47 @@ export interface GuardianFileConfig {
 
 const KEYS = new Set(["$schema", "format", "matrix", "binding", "scoring", "seeds", "dataDir", "port", "approvalTimeoutSeconds", "skewWindowMs", "activation"]);
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+const isInt = (v: unknown, min: number, max: number): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+
+/** Read a config file, checking every key before anything uses it. Paths come back absolute. */
 export function readConfig(path: string): GuardianFileConfig {
-  const c = JSON.parse(readFileSync(path, "utf8"));
+  const c: unknown = JSON.parse(readFileSync(path, "utf8"));
   const bad = (m: string) => new Error(`${path}: ${m}`);
-  if (c?.format !== CONFIG_FORMAT) throw bad(`format must be ${CONFIG_FORMAT}`);
+  if (!isObject(c) || c.format !== CONFIG_FORMAT) throw bad(`format must be ${CONFIG_FORMAT}`);
   for (const k of Object.keys(c)) if (!KEYS.has(k)) throw bad(`unknown key ${k}`);
-  for (const k of ["matrix", "binding", "dataDir"]) if (typeof c[k] !== "string") throw bad(`${k} must be a path`);
-  if (c.scoring !== undefined && !(Array.isArray(c.scoring) && c.scoring.every((s: unknown) => typeof s === "string"))) throw bad("scoring must be a list of paths");
-  if (c.seeds !== undefined && typeof c.seeds !== "string") throw bad("seeds must be a path");
-  if (!Number.isInteger(c.port) || c.port < 1024 || c.port > 65535) throw bad("port must be an integer from 1024 to 65535");
-  if (c.approvalTimeoutSeconds !== undefined && !(Number.isInteger(c.approvalTimeoutSeconds) && c.approvalTimeoutSeconds >= 10 && c.approvalTimeoutSeconds <= 540)) throw bad("approvalTimeoutSeconds must be 10 to 540 (under Claude Code's 600 s hook limit)");
-  if (c.skewWindowMs !== undefined && !(Number.isInteger(c.skewWindowMs) && c.skewWindowMs >= 1000 && c.skewWindowMs <= 300_000)) throw bad("skewWindowMs must be 1000 to 300000");
-  for (const [agent, a] of Object.entries((c.activation ?? {}) as Record<string, any>)) {
-    if (!Array.isArray(a?.rows) || a.rows.some((r: unknown) => typeof r !== "string")) throw bad(`activation.${agent}.rows must be row ids`);
+  const { matrix, binding, dataDir, scoring, seeds, port, approvalTimeoutSeconds, skewWindowMs, activation } = c;
+  if (typeof matrix !== "string") throw bad("matrix must be a path");
+  if (typeof binding !== "string") throw bad("binding must be a path");
+  if (typeof dataDir !== "string") throw bad("dataDir must be a path");
+  if (scoring !== undefined && !isStrings(scoring)) throw bad("scoring must be a list of paths");
+  if (seeds !== undefined && typeof seeds !== "string") throw bad("seeds must be a path");
+  if (!isInt(port, 1024, 65535)) throw bad("port must be an integer from 1024 to 65535");
+  if (approvalTimeoutSeconds !== undefined && !isInt(approvalTimeoutSeconds, 10, 540)) throw bad("approvalTimeoutSeconds must be 10 to 540 (under Claude Code's 600 s hook limit)");
+  if (skewWindowMs !== undefined && !isInt(skewWindowMs, 1000, 300_000)) throw bad("skewWindowMs must be 1000 to 300000");
+  const activations: Record<string, Activation> = {};
+  if (activation !== undefined && !isObject(activation)) throw bad("activation must map agent ids to activations");
+  for (const [agent, a] of Object.entries(activation ?? {})) {
+    if (!isObject(a) || !isStrings(a.rows)) throw bad(`activation.${agent}.rows must be row ids`);
     for (const k of Object.keys(a)) if (!["rows", "scopes", "task"].includes(k)) throw bad(`activation.${agent}: unknown key ${k}`);
+    if (a.scopes !== undefined && !isStrings(a.scopes)) throw bad(`activation.${agent}.scopes must be a list of scopes`);
+    if (a.task !== undefined && typeof a.task !== "string") throw bad(`activation.${agent}.task must be a string`);
+    activations[agent] = { rows: a.rows, ...(a.scopes !== undefined ? { scopes: a.scopes } : {}), ...(a.task !== undefined ? { task: a.task } : {}) };
   }
   const base = dirname(resolve(path));
-  return { ...c, matrix: resolve(base, c.matrix), binding: resolve(base, c.binding), ...(c.scoring ? { scoring: c.scoring.map((s: string) => resolve(base, s)) } : {}), ...(c.seeds ? { seeds: resolve(base, c.seeds) } : {}), dataDir: resolve(base, c.dataDir) };
+  return {
+    format: CONFIG_FORMAT,
+    matrix: resolve(base, matrix),
+    binding: resolve(base, binding),
+    ...(scoring ? { scoring: scoring.map((s) => resolve(base, s)) } : {}),
+    ...(seeds !== undefined ? { seeds: resolve(base, seeds) } : {}),
+    dataDir: resolve(base, dataDir),
+    port,
+    ...(approvalTimeoutSeconds !== undefined ? { approvalTimeoutSeconds } : {}),
+    ...(skewWindowMs !== undefined ? { skewWindowMs } : {}),
+    ...(activation !== undefined ? { activation: activations } : {}),
+  };
 }
 
 export interface Guardian {
@@ -74,13 +98,14 @@ export type SeedOptions = Pick<ConstructorParameters<typeof Seeder>[0], "random"
  * lints, matrix, binding and scoring policies compile, activation names rows that exist, and the seed set
  * lints against the policy. Throws on the first failure. `verify` runs it too, so evidence is never
  * reported as fine under a configuration the Guardian would refuse to start with. The matrix comes back
- * as parsed: it has been linted, so its shape is the schema's.
+ * typed by its schema: it has been linted, and the lint validates it first.
  */
-export function checkConfig(config: GuardianFileConfig): { matrix: any; policy: Policy; seedSet?: SeedSet } {
-  const matrix = JSON.parse(readFileSync(config.matrix, "utf8"));
+export function checkConfig(config: GuardianFileConfig): { matrix: Matrix01 | Matrix02; policy: Policy; seedSet?: SeedSet } {
+  const parsed: unknown = JSON.parse(readFileSync(config.matrix, "utf8"));
   const binding = JSON.parse(readFileSync(config.binding, "utf8"));
-  const lint = lintMatrix(matrix);
+  const lint = lintMatrix(parsed);
   if (!lint.ok) throw new Error(`matrix doesn't lint: ${lint.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
+  const matrix = parsed as Matrix01 | Matrix02;
   const scoring = (config.scoring ?? []).map((f) => JSON.parse(readFileSync(f, "utf8")));
   const compiled = compilePolicy(matrix, binding, scoring);
   if (!compiled.ok) throw new Error(`policy doesn't compile: ${compiled.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Typed boundaries:** TypeScript types derived from the schemas (ours and the vendored ACS ones) by
+  `pnpm gen:validators`, and every generated validator declared a type guard for its schema's type. The
+  endpoint, the handshake, the Guardian's configuration and `checkConfig`'s matrix, the approval API and
+  the shim read parsed input through them instead of `any`. Behaviour this changes, each toward deny:
+  - the shim checks every Guardian answer against the ACS response schema, and one that fails is a
+    `malformed_response` decision failure;
+  - a Claude Code hook input with a field of the wrong type is unclassifiable, so its call is denied
+    (a missing or null field is still absent);
+  - the approval API answers 400 to a body whose fields aren't strings;
+  - the configuration's `activation` entries have their `scopes` and `task` checked too.
 - **Storage:** one journal, `journal.jsonl`, with everything one step writes on a single line, replaces
   the three files. A decision's record, chain entry and events are now saved together or not at all, so
   a failed write can no longer leave a record without its chain entry. A 0.1.0 data directory is still
