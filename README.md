@@ -56,7 +56,7 @@ What each part guarantees, and where that stops. Every item is also stated where
 
 ## What's here
 
-Early. Available so far:
+Early: version 0.1.0, the first tagged release (see [CHANGELOG.md](CHANGELOG.md)). Available so far:
 
 ### schema/
 

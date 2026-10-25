@@ -1,6 +1,6 @@
 {
   "name": "@verkflode/vaom-guardian-probe",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Boundary probes for VAOM Guardian: runs each probe's attempt inside a real agent host (Claude Code) and writes vaom.probe-result evidence for the Guardian to keep. Unlike the shim and the Guardian, it starts processes: the agent host is what it probes.",
   "license": "Apache-2.0",

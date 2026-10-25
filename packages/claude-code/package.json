@@ -1,6 +1,6 @@
 {
   "name": "@verkflode/vaom-guardian-claude-code",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "The Claude Code shim for VAOM Guardian: a hook process that puts every tool call to the Guardian over ACS and answers Claude Code explicitly on every path, denying whenever it can't get a decision. Node built-ins only; talks to 127.0.0.1 only.",
   "license": "Apache-2.0",

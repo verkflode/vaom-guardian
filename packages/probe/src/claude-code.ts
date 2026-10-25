@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify, PROBE_RESULT_FORMAT, toolMatches, type ProbeResult } from "@verkflode/vaom-guardian-core";
 
-export const RUNNER = { id: "vaom-probe/claude-code", version: "0.0.0" };
+export const RUNNER = { id: "vaom-probe/claude-code", version: "0.1.0" };
 
 export interface ProbeDef { boundary: string; forbiddenTools: string[]; attempt: { prompt: string }; canary?: string; refusal?: string }
 export interface ProbeSet { id: string; version: string; probes: ProbeDef[] }

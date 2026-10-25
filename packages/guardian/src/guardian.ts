@@ -11,7 +11,7 @@ import { loadSecrets, type Secrets } from "./secrets.ts";
 import { Store } from "./store.ts";
 
 export const CONFIG_FORMAT = "vaom-guardian.config/0.1";
-export const VERSION = "0.0.0";
+export const VERSION = "0.1.0";
 
 export interface Activation { rows: string[]; scopes?: string[]; task?: string }
 

@@ -1,6 +1,6 @@
 {
   "name": "@verkflode/vaom-guardian-acs",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "OWASP ACS wire adapter for VAOM Guardian, pinned to ACS v0.1.2 (spec text 0.1.0): envelopes, handshake, HMAC signatures, replay protection, the audit chain, and translation to and from the core. Pure: no I/O.",
   "license": "Apache-2.0",
