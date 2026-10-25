@@ -66,7 +66,14 @@ export interface Guardian {
 /** For tests: seeding randomness and delay. */
 export type SeedOptions = Pick<ConstructorParameters<typeof Seeder>[0], "random" | "delayMs">;
 
-export function createGuardian(config: GuardianFileConfig, now: number = Date.now(), seedOptions?: SeedOptions): Guardian {
+/**
+ * Every check the Guardian makes on its configuration before starting, with no side effects: the matrix
+ * lints, matrix, binding and scoring policies compile, activation names rows that exist, and the seed set
+ * lints against the policy. Throws on the first failure. `verify` runs it too, so evidence is never
+ * reported as fine under a configuration the Guardian would refuse to start with. The matrix comes back
+ * as parsed: it has been linted, so its shape is the schema's.
+ */
+export function checkConfig(config: GuardianFileConfig): { matrix: any; policy: Policy; seedSet?: SeedSet } {
   const matrix = JSON.parse(readFileSync(config.matrix, "utf8"));
   const binding = JSON.parse(readFileSync(config.binding, "utf8"));
   const lint = lintMatrix(matrix);
@@ -79,6 +86,15 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
     const unknown = a.rows.filter((r) => !policy.rowById.has(r));
     if (unknown.length) throw new Error(`activation.${agent}: rows not in the matrix: ${unknown.join(", ")}`);
   }
+  if (!config.seeds) return { matrix, policy };
+  const set = JSON.parse(readFileSync(config.seeds, "utf8"));
+  const seedLint = lintSeeds(set, policy);
+  if (!seedLint.ok) throw new Error(`seeds don't lint: ${seedLint.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
+  return { matrix, policy, seedSet: set as SeedSet };
+}
+
+export function createGuardian(config: GuardianFileConfig, now: number = Date.now(), seedOptions?: SeedOptions): Guardian {
+  const { matrix, policy, seedSet: seeds } = checkConfig(config);
 
   const store = new Store(config.dataDir);
   const secrets = loadSecrets(resolve(config.dataDir, "secrets.json"), true);
@@ -104,14 +120,11 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
   const contexts = new ContextRegistry(policy);
 
   let seeder: Seeder | undefined, seedSet: { id: string; version: string } | undefined;
-  if (config.seeds) {
-    const set = JSON.parse(readFileSync(config.seeds, "utf8"));
-    const lint = lintSeeds(set, policy);
-    if (!lint.ok) throw new Error(`seeds don't lint: ${lint.findings.map((f) => `${f.path} ${f.message}`).join("; ")}`);
-    seedSet = { id: set.id, version: set.version };
+  if (seeds) {
+    seedSet = { id: seeds.id, version: seeds.version };
     const plantedBefore = new Map<string, number>();
     for (const e of store.events()) if (e.type === "seed-planted") plantedBefore.set(e.seed as string, (plantedBefore.get(e.seed as string) ?? 0) + 1);
-    seeder = new Seeder({ policy, ledger, contexts, factKey: secrets.factKey, set: set as SeedSet, plantedBefore, ...(seedOptions ?? {}) });
+    seeder = new Seeder({ policy, ledger, contexts, factKey: secrets.factKey, set: seeds, plantedBefore, ...(seedOptions ?? {}) });
   }
   const timeoutMs = (config.approvalTimeoutSeconds ?? 300) * 1000;
   const endpoint = new AcsEndpoint({

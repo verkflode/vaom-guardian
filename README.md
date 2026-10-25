@@ -1,10 +1,20 @@
 # VAOM Guardian
 
-A reference implementation of the Verkflöde Agent Operating Model (VAOM) as an [OWASP Agent Control Standard](https://github.com/genai-security-project/agent-control-standard) Guardian: it fails closed, enforces a VAOM Delegation Authority Matrix, and produces evidence that the boundaries hold.
+A reference implementation of the [Verkflöde Agent Operating Model (VAOM)](https://vaom.ai/) as an [OWASP Agent Control Standard](https://github.com/genai-security-project/agent-control-standard) Guardian: it fails closed, enforces a VAOM Delegation Authority Matrix, and produces evidence that the boundaries hold.
 
 **What it is:** a reference implementation, an evidence generator, and a contributor to ACS conformance work.
 
 **What it isn't:** a production security product, an enterprise platform, or an approval app. A Guardian `deny` is a policy-strength control; the project's reports say so, and push towards boundaries that don't depend on it.
+
+## Check a matrix
+
+Requires Node 22.18 or later and pnpm. Clone this repository, run `pnpm install`, then point the Guardian at a folder holding a matrix, its binding, its scoring policies and a `guardian.config.json` that names them (the Delegation Lab's export is such a folder):
+
+```sh
+node packages/guardian/src/cli.ts verify --config path/to/guardian.config.json
+```
+
+It checks the configuration the way the Guardian does before it starts (the matrix lints, and the matrix, binding and scoring policies compile together), then re-checks whatever evidence the Guardian has stored; a fresh folder has none. Any problem exits non-zero. `serve` runs the Guardian itself; see [Status](#status).
 
 ## ACS version and failure posture
 
@@ -52,7 +62,7 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
   - **Spawns:** every sub-agent spawn decision, allowed or denied, is stored as a spawn event with its reason, as the evidence for chain integrity.
   - **Probe results:** `vaom-guardian probe import --config <guardian.json> result.json...` checks each result against its schema and the matrix and appends it to the store, all or nothing. A result is the runner's claim, kept as evidence; `verify` re-checks it, and the scorecard judges the boundaries from it.
   - **Scorecard:** `vaom-guardian scorecard --config <guardian.json> [--from ISO] [--to ISO] [--json]` reads the evidence files (no Guardian needs to run) and prints the scorecard for a period, by default the last seven days.
-  - **Verification:** `vaom-guardian verify` re-checks the evidence offline: record schemas, and that each record's decision is the one its placements combine to; every session's hash chain, and that each record's chain entry is in it; every approval's signature against the enrolled key with its challenge recomputed, that its decision has a record, and that its credential wasn't revoked before it; and that every executed review or escalation has an approval for the same decision and role. It lists decisions never resolved as open items. What it can't see: chain entries cut off after a session's last decision (observed steps have no record to cross-check), and a deleted rejection or expiry, which leaves its decision looking open.
+  - **Verification:** `vaom-guardian verify` first checks the configuration as `serve` would, and refuses to go on if the Guardian wouldn't start with it. Then it re-checks the evidence offline: record schemas, and that each record's decision is the one its placements combine to; every session's hash chain, and that each record's chain entry is in it; every approval's signature against the enrolled key with its challenge recomputed, that its decision has a record, and that its credential wasn't revoked before it; and that every executed review or escalation has an approval for the same decision and role. It lists decisions never resolved as open items. What it can't see: chain entries cut off after a session's last decision (observed steps have no record to cross-check), and a deleted rejection or expiry, which leaves its decision looking open.
 
   Try it: `node packages/guardian/src/cli.ts serve --config packages/guardian/examples/incident.guardian.json --enroll owner:sre-lead`, open the printed link to enroll, run `node packages/guardian/examples/demo-agent.ts`, and approve at `http://localhost:47100/`.
 
@@ -73,7 +83,7 @@ The **cap ledger** and **`decide`** complete the decision path: `decide` evaluat
 
 ## Development
 
-Requires Node 22+ and pnpm. `pnpm install`, then `pnpm test` (package tests and schema tests) and `pnpm typecheck`. After changing a schema, run `pnpm gen:validators`; a test fails if the committed validators are stale.
+Requires Node 22.18+ (the CLIs run as TypeScript directly) and pnpm. `pnpm install`, then `pnpm test` (package tests and schema tests) and `pnpm typecheck`. After changing a schema, run `pnpm gen:validators`; a test fails if the committed validators are stale.
 
 ## License
 

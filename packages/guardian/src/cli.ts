@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { scorecard, type Metric, type ProbeResult } from "@verkflode/vaom-guardian-core";
-import { createGuardian, readConfig } from "./guardian.ts";
+import { checkConfig, createGuardian, readConfig } from "./guardian.ts";
 import { listCredentials, revokeCredential } from "./credentials.ts";
 import { importProbeResults, verifyEvidence } from "./evidence.ts";
 import { createGuardianServer } from "./server.ts";
@@ -24,6 +24,14 @@ if (!values.config || !(known.includes(command ?? "") || (command === "probe" &&
 const config = readConfig(values.config);
 
 if (command === "verify") {
+  // The configuration first: evidence is never reported as fine under one the Guardian wouldn't start with.
+  try {
+    const { policy } = checkConfig(config);
+    console.log(`config: matrix ${policy.matrix.id}@${policy.matrix.version} lints, and compiles with its binding and scoring policies`);
+  } catch (e) {
+    console.log(`PROBLEM config: ${(e as Error).message}`);
+    process.exit(1);
+  }
   const r = verifyEvidence(new Store(config.dataDir), `http://localhost:${config.port}`);
   console.log(`${r.records} records, ${r.sessions} sessions, ${r.approvals} approvals, ${r.seeds} planted cases`);
   if (r.open.length) console.log(`${r.open.length} decision(s) never resolved; their cap use stays counted: ${r.open.join(", ")}`);
