@@ -91,7 +91,7 @@ const server = createGuardianServer(g);
 server.listen(config.port, "127.0.0.1", () => {
   console.log(`VAOM Guardian: matrix ${g.policy.matrix.id}@${g.policy.matrix.version}, binding ${g.policy.binding.id}@${g.policy.binding.version}, scoring ${[...g.policy.scoring.keys()].join(", ") || "(none)"}`);
   console.log(`ACS endpoint  http://127.0.0.1:${config.port}/acs`);
-  console.log(`approvals     ${g.origin}/`);
+  console.log(`approvals     ${g.origin}/#token=${g.pageToken}`);
   if (values.enroll) {
     const [label, roles] = values.enroll.split(":");
     const token = g.approvals.openEnrollment(label ?? "", (roles ?? "").split(",").filter(Boolean), Date.now());

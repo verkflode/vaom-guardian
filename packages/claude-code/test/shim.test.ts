@@ -62,6 +62,7 @@ async function guardian(dir = mkdtempSync(join(tmpdir(), "vaom-shim-")), port?: 
   let stopped = false;
   const stop = () => new Promise<void>((res) => { if (stopped) return res(); stopped = true; server.closeAllConnections(); server.close(() => res()); });
   cleanup.push(() => { void stop(); rmSync(dir, { recursive: true, force: true }); });
+  pageTokens.set(p, g.pageToken);
   return { g, port: p, dir, config, stop };
 }
 
@@ -77,11 +78,14 @@ const post = (p: { tool_name: string; tool_input: unknown; tool_use_id: string }
 const decision = (out: any) => out?.hookSpecificOutput?.permissionDecision;
 const restart = (incident = "INC-7") => pre("mcp__deploy__rolling_restart", { incident_id: incident, service: "web", stateless: true });
 
+/** Each running test Guardian's page token, by port, sent on the approval page's API. */
+const pageTokens = new Map<number, string>();
+
 function http(port: number, method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
     const origin = `http://localhost:${port}`;
-    const req = request({ host: "127.0.0.1", port, method, path, headers: { host: `localhost:${port}`, origin, ...(data ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) } : {}) } }, (res) => {
+    const req = request({ host: "127.0.0.1", port, method, path, headers: { host: `localhost:${port}`, origin, "x-vaom-page-token": pageTokens.get(port) ?? "", ...(data ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) } : {}) } }, (res) => {
       let s = ""; res.on("data", (c) => (s += c)); res.on("end", () => resolve({ status: res.statusCode!, json: JSON.parse(s) }));
     });
     req.on("error", reject);

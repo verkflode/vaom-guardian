@@ -45,8 +45,11 @@ export const ENROLL_HTML = shell("Guardian enrollment", `
 export const APP_JS = `"use strict";
 const b64e = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
 const b64d = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+// This run's page token, from the link the Guardian printed (the fragment never reaches a server or a log).
+const PAGE_TOKEN = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+const auth = { "X-VAOM-Page-Token": PAGE_TOKEN };
 async function post(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...auth }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
@@ -87,7 +90,9 @@ const decided = new Set();
 async function refresh() {
   const root = document.getElementById("asks");
   let data;
-  try { const r = await fetch("/api/asks"); data = await r.json(); } catch { return; }
+  let r;
+  try { r = await fetch("/api/asks", { headers: auth }); data = await r.json(); } catch { return; }
+  if (r.status === 401) { root.replaceChildren(el("p", { class: "empty" }, "Open the approvals link the Guardian printed on its terminal: it carries this run's page token. (The token changes every time the Guardian starts.)")); return; }
   const s = document.getElementById("seeding");
   if (data.seeding) {
     s.hidden = false;

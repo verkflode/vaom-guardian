@@ -2,7 +2,7 @@
 // ledger from it, and recover from an unclean stop. Refuses to start on anything it can't trust.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { AcsEndpoint, PROFILES } from "@verkflode/vaom-guardian-acs";
 import { CapLedger, compilePolicy, ContextRegistry, lintMatrix, lintSeeds, resolveRecord, type Policy } from "@verkflode/vaom-guardian-core";
 import { Seeder, type SeedSet } from "./seeding.ts";
@@ -60,6 +60,9 @@ export interface Guardian {
   approvals: Approvals;
   secrets: Secrets;
   origin: string;
+  /** This run's token for the approval page's API, shown only on the Guardian's terminal (in the page
+   *  link's fragment), so other local processes can't list or reject asks. New on every start. */
+  pageToken: string;
   recovered: number;
 }
 
@@ -147,5 +150,5 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
 
   const origin = `http://localhost:${config.port}`;
   const approvals = new Approvals({ store, endpoint, origin, rpId: "localhost", timeoutMs, roles: new Set(Object.keys(matrix.roles ?? {})), recordApprovers: matrix.oversight?.reviewerLevelMetrics?.enabled === true, ...(seeder && seedSet ? { seeder, seedSet } : {}) });
-  return { config, policy, store, endpoint, approvals, secrets, origin, recovered: expired.length };
+  return { config, policy, store, endpoint, approvals, secrets, origin, pageToken: randomBytes(24).toString("base64url"), recovered: expired.length };
 }

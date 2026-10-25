@@ -37,6 +37,9 @@ function configFile(dir: string, port: number, extra: Record<string, unknown> = 
   return path;
 }
 
+/** Each running test Guardian's page token, by port: the helper sends it on /api/asks unless told not to. */
+const pageTokens = new Map<number, string>();
+
 async function start(dir = mkdtempSync(join(tmpdir(), "vaom-guardian-")), extra: Record<string, unknown> = {}, seedOptions?: SeedOptions): Promise<{ g: Guardian; port: number; dir: string; server: Server }> {
   for (let tries = 0; ; tries++) {
     const port = 40000 + Math.floor(Math.random() * 20000);
@@ -45,18 +48,21 @@ async function start(dir = mkdtempSync(join(tmpdir(), "vaom-guardian-")), extra:
     try {
       await new Promise<void>((res, rej) => { server.once("error", rej); server.listen(port, "127.0.0.1", () => res()); });
       open.push({ server, dir });
+      pageTokens.set(port, g.pageToken);
       return { g, port, dir, server };
     } catch (e) { if (tries > 5) throw e; }
   }
 }
 
-function http(port: number, method: string, path: string, o: { host?: string; origin?: string; type?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; json: any }> {
+function http(port: number, method: string, path: string, o: { host?: string; origin?: string; type?: string; body?: unknown; headers?: Record<string, string>; pageToken?: string | null } = {}): Promise<{ status: number; json: any }> {
+  const token = o.pageToken === undefined ? pageTokens.get(port) : o.pageToken;
   return new Promise((resolve, reject) => {
     const data = o.body === undefined ? undefined : typeof o.body === "string" ? o.body : JSON.stringify(o.body);
     const req = request({ host: "127.0.0.1", port, method, path, headers: {
       host: o.host ?? `localhost:${port}`,
       ...(o.origin !== undefined ? { origin: o.origin } : {}),
       ...(data !== undefined ? { "content-type": o.type ?? "application/json", "content-length": Buffer.byteLength(data) } : {}),
+      ...(path.startsWith("/api/asks") && token ? { "x-vaom-page-token": token } : {}),
       ...o.headers,
     } }, (res) => {
       let s = "";
@@ -219,6 +225,25 @@ describe("approvals can't be forged or reused", () => {
     const t = Date.now();
     const c = g.approvals.challenge(S1, ask.requestId, t);
     expect(() => g.approvals.approve(S1, ask.requestId, auth.get({ challenge: c.challenge, origin: g.origin, rpId: "localhost" }), t + 121_000)).toThrow(/no live challenge/);
+  });
+  it("lists and rejects asks only for this run's page token: another local process gets nothing", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const ask = await call("steps/toolCallRequest", restart("INC-7"));
+    const origin = g.origin;
+    for (const pageToken of [null, "", "wrong", g.pageToken.slice(1)]) {
+      const listed = await http(port, "GET", "/api/asks", { pageToken });
+      expect(listed.status, String(pageToken)).toBe(401);
+      expect(JSON.stringify(listed.json)).not.toContain(ask.requestId);
+      expect((await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/reject`, { origin, body: {}, pageToken })).status).toBe(401);
+      expect((await http(port, "POST", `/api/asks/${S1}/${ask.requestId}/challenge`, { origin, body: {}, pageToken })).status).toBe(401);
+    }
+    expect((await poll(g, port, S1, ask.requestId)).json.status).toBe("pending");
+    // The terminal's link works, and the token is new on every start.
+    expect((await http(port, "GET", "/api/asks")).json.asks.map((a: any) => a.request_id)).toEqual([ask.requestId]);
+    const other = await start();
+    expect(other.g.pageToken).not.toBe(g.pageToken);
+    expect(g.pageToken.length).toBeGreaterThanOrEqual(32);
   });
   it("a cross-origin page can't reject an ask (CSRF)", async () => {
     const { g, port } = await start();

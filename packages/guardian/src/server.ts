@@ -4,7 +4,8 @@
 //   GET  /v1/asks/{session}/{request}  approval status for the shim, long-polled (?wait=seconds), HMAC-authenticated both ways
 //   GET  /                             the approval page; /app.js its script
 //   GET  /enroll                       credential enrollment page (needs the token from the terminal)
-//   /api/...                           JSON for those pages
+//   /api/...                           JSON for those pages; /api/asks* needs this run's page token
+//                                      (X-VAOM-Page-Token), printed in the page link on the terminal
 //
 // Every answer is decided and persisted before it's sent; if persisting fails, the answer is an error,
 // which the agent treats as deny. Browser routes check Host and Origin (against DNS rebinding and
@@ -104,6 +105,13 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
 
     // ---- browser-facing
     if (host !== browserHost) throw new HttpError(421, `open the page at http://${browserHost}/`);
+    // The asks and their arguments, and rejecting one, are for whoever holds this run's page token: the
+    // terminal that started the Guardian. Any other local process gets nothing (approving also needs Touch ID).
+    if (p === "/api/asks" || p.startsWith("/api/asks/")) {
+      const got = Buffer.from(String(req.headers["x-vaom-page-token"] ?? ""));
+      const want = Buffer.from(g.pageToken);
+      if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, "open the approval link printed on the Guardian's terminal: it carries this run's page token");
+    }
     if (req.method === "GET") {
       if (p === "/") return send(res, 200, "text/html; charset=utf-8", INDEX_HTML);
       if (p === "/enroll") return send(res, 200, "text/html; charset=utf-8", ENROLL_HTML);
