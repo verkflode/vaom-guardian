@@ -62,7 +62,7 @@ function envelope(method: string, payload: unknown, o: { session?: string; agent
   if (o.chainHash !== undefined) metadata.session_state = { chain_hash: o.chainHash };
   return { jsonrpc: "2.0", id: ++n, method, params: { acs_version: o.version ?? "0.1.0", request_id: o.requestId ?? uuid(), timestamp: new Date(o.at ?? T0).toISOString(), metadata, payload } };
 }
-const signed = (env: ReturnType<typeof envelope>, session = S1) => sign(env, sessionKey(IKM, session), "agent-key");
+const signed = (env: ReturnType<typeof envelope>, session = S1) => sign(env, sessionKey(IKM, session), "guardian-1");
 
 /** Send a signed request; check the response's schema and signature; collect chain entries. */
 function send(s: Setup, method: string, payload: unknown, o: Parameters<typeof envelope>[2] = {}) {
@@ -119,10 +119,21 @@ describe("transport checks fail closed", () => {
     const s = started();
     const raw = envelope("steps/toolCallRequest", restart("INC-7"));
     expect(s.ep.handle(raw, T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
-    expect(s.ep.handle(sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, SUB), "k"), T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
+    expect(s.ep.handle(sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, SUB), "guardian-1"), T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
     const t = signed(envelope("steps/toolCallRequest", restart("INC-7")));
     (t.params.payload as any).arguments.stateless.value = false;
     expect(s.ep.handle(t, T0).response.error.code).toBe(ERR.SIGNATURE_INVALID);
+  });
+  it("rejects a key_id it doesn't hold, unsigned, without trying its own secret", () => {
+    const s = started();
+    const r = s.ep.handle(sign(envelope("steps/toolCallRequest", restart("INC-7")), sessionKey(IKM, S1), "guardian-2"), T0).response;
+    expect(r.error.code).toBe(ERR.SIGNATURE_INVALID);
+    expect(r.error.message).toMatch(/key_id/);
+    expect(r.result).toBeUndefined();
+  });
+  it("signs its answer under the key_id the request named", () => {
+    const s = started();
+    expect(s.ep.handle(signed(envelope("steps/toolCallRequest", restart("INC-7"))), T0).response.result.signature.key_id).toBe("guardian-1");
   });
   it("a forged request doesn't burn its request id", () => {
     const s = started();

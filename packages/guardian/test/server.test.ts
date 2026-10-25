@@ -72,7 +72,7 @@ function http(port: number, method: string, path: string, o: { host?: string; or
 /** An ACS agent: signs envelopes with the session key derived from the Guardian's shared secret. */
 function agent(g: Guardian, port: number, session = S1, agentId = "incident-agent") {
   return async (method: string, payload: unknown, requestId = uuid()) => {
-    const env = sign({ jsonrpc: "2.0", id: ++n, method, params: { acs_version: "0.1.0", request_id: requestId, timestamp: new Date().toISOString(), metadata: { agent_id: agentId, session_id: session }, payload } }, sessionKey(g.secrets.ikm, session), "shim");
+    const env = sign({ jsonrpc: "2.0", id: ++n, method, params: { acs_version: "0.1.0", request_id: requestId, timestamp: new Date().toISOString(), metadata: { agent_id: agentId, session_id: session }, payload } }, sessionKey(g.secrets.ikm, session), g.secrets.keyId);
     const r = await http(port, "POST", "/acs", { host: `127.0.0.1:${port}`, body: env });
     return { ...r.json, requestId };
   };

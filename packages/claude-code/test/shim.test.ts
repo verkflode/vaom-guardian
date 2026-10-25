@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createGuardian, createGuardianServer, readConfig, Store, verifyEvidence, type Guardian } from "@verkflode/vaom-guardian-server";
 import { SoftAuthenticator } from "../../guardian/test/authenticator.ts";
 import { GuardianClient, runHook, StateDir, type ShimOptions } from "../src/index.ts";
+import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
 const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
@@ -65,7 +66,7 @@ async function guardian(dir = mkdtempSync(join(tmpdir(), "vaom-shim-")), port?: 
 }
 
 function shim(r: Running, o: Partial<ShimOptions> & { state?: StateDir } = {}): ShimOptions {
-  const client = new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: "shim", agentId: AGENT, requestTimeoutMs: 5000 });
+  const client = new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: r.g.secrets.keyId, agentId: AGENT, requestTimeoutMs: 5000 });
   return { client, state: o.state ?? new StateDir(join(r.dir, "shim")), deadline: Date.now() + 60_000, approvalsUrl: `http://localhost:${r.port}/`, ...o };
 }
 
@@ -162,7 +163,7 @@ describe("PreToolUse decisions", () => {
   it("denies when the Guardian negotiates a session but opens no execution context for this agent", async () => {
     const r = await guardian();
     const o = shim(r);
-    const stranger = { ...o, client: new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: "shim", agentId: "someone-else", requestTimeoutMs: 5000 }) };
+    const stranger = { ...o, client: new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: r.g.secrets.keyId, agentId: "someone-else", requestTimeoutMs: 5000 }) };
     expect(decision(await runHook(pre("mcp__telemetry__query", { query: "x" }), stranger))).toBe("deny");
   });
 
@@ -184,6 +185,27 @@ describe("PreToolUse decisions", () => {
     const out = await runHook(pre("mcp__telemetry__query", { query: "x" }), o);
     expect(decision(out)).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/signature/);
+  });
+
+  it("denies an answer signed with the right secret under another key_id", async () => {
+    const r = await guardian();
+    const o = shim(r);
+    await runHook({ hook_event_name: "SessionStart", session_id: CC, source: "startup" }, o);
+    await r.stop();
+    // A valid HMAC, but labelled as another secret: the shim holds one label and accepts no other (ACS §10).
+    const impostor = createServer((req, res) => {
+      let s = ""; req.on("data", (c) => (s += c)); req.on("end", () => {
+        const env = JSON.parse(s);
+        const answer = { jsonrpc: "2.0", id: env.id, result: { type: "final", acs_version: "0.1.0", request_id: env.params.request_id, decision: "allow", chain_hash: "0".repeat(64) } };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(sign(answer, sessionKey(r.g.secrets.ikm, env.params.metadata.session_id), "another-label")));
+      });
+    });
+    await new Promise<void>((res) => impostor.listen(r.port, "127.0.0.1", () => res()));
+    cleanup.push(() => impostor.close());
+    const out = await runHook(pre("mcp__telemetry__query", { query: "x" }), o);
+    expect(decision(out)).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/key_id/);
   });
 
   it("answers allow and deny correctly for parallel calls on one session, with the chain intact", async () => {

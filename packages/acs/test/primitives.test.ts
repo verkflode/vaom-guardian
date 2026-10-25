@@ -17,8 +17,16 @@ describe("HKDF-SHA256 (RFC 5869)", () => {
   });
   it("matches node:crypto, and the session key uses the stated parameters", () => {
     const ikm = bytes("11".repeat(32)), sid = "6f1c3c1e-0d2b-4b8e-9a5f-1b2c3d4e5f60";
-    const node = new Uint8Array(hkdfSync("sha256", ikm, new Uint8Array(0), Buffer.from(`acs/0.1.0 session-key ${sid}`, "utf8"), 32));
+    const node = new Uint8Array(hkdfSync("sha256", ikm, new Uint8Array(0), Buffer.from(sid, "utf8"), 32));
     expect(hex(sessionKey(ikm, sid))).toBe(hex(node));
+  });
+  it("derives ACS §10's example session key", () => {
+    const ikm = Uint8Array.from({ length: 32 }, (_, i) => i);
+    expect(hex(sessionKey(ikm, "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"))).toBe("80f0dc8c611279bfc2af2d5f374c5cb685888192ce1af5c3e0673d8fa748e8a4");
+  });
+  it("takes session_id exactly as sent: another spelling of the same UUID derives another key", () => {
+    const ikm = bytes("11".repeat(32));
+    expect(hex(sessionKey(ikm, "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"))).not.toBe(hex(sessionKey(ikm, "6B1F2C9E-4D7A-4E3B-8A51-9C0D2E7F1A36")));
   });
 });
 

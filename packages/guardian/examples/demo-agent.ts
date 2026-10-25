@@ -17,7 +17,7 @@ const session = randomUUID();
 let id = 0;
 
 async function acs(method: string, payload: unknown, requestId = randomUUID()) {
-  const env = sign({ jsonrpc: "2.0", id: ++id, method, params: { acs_version: "0.1.0", request_id: requestId, timestamp: new Date().toISOString(), metadata: { agent_id: "incident-agent", session_id: session }, payload } }, sessionKey(ikm, session), "demo");
+  const env = sign({ jsonrpc: "2.0", id: ++id, method, params: { acs_version: "0.1.0", request_id: requestId, timestamp: new Date().toISOString(), metadata: { agent_id: "incident-agent", session_id: session }, payload } }, sessionKey(ikm, session), secrets.key_id);
   const r = await fetch(`${base}/acs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(env) });
   return { requestId, ...(await r.json()) };
 }

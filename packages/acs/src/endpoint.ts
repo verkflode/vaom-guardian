@@ -143,6 +143,9 @@ export class AcsEndpoint {
       }
       if (!acceptsVersion(p.acs_version)) throw new AcsError(ERR.UNSUPPORTED_VERSION, `ACS ${p.acs_version} is not supported`, { supported_versions: ["0.1.0"] });
       const sid: string = p.metadata.session_id;
+      // key_id names the secret (§10): this Guardian holds one, under its configured label, and rejects any
+      // other label rather than try another secret. The error is unsigned: no configured secret matches.
+      if (p.signature && p.signature.key_id !== this.cfg.keyId) throw new AcsError(ERR.SIGNATURE_INVALID, "unknown key_id");
       const key = sessionKey(this.cfg.ikm, sid);
       const v = verify(env, key);
       if (!v.ok) throw new AcsError(ERR.SIGNATURE_INVALID, v.why);

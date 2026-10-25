@@ -81,6 +81,7 @@ export class GuardianClient {
       if (typeof result.negotiated_version !== "string" || !acceptsVersion(result.negotiated_version)) throw new Error("the Guardian negotiated a version this shim doesn't speak");
       return result;
     }
+    if (result.signature && result.signature.key_id !== this.cfg.keyId) throw new Error("the Guardian's answer is signed under a different key_id");
     const v = verify(res, key);
     if (!v.ok) throw new Error(`the Guardian's answer fails its signature check: ${v.why}`);
     if (result.request_id !== requestId) throw new Error("the Guardian's answer is for a different request");
