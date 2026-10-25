@@ -6,8 +6,12 @@
 // Parallel tool calls run their hooks at the same time, so every read-modify-write of a session's state
 // happens under a lock: a directory created with mkdir, which is atomic. A lock is held for one round
 // trip to the Guardian, never while waiting for a human.
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, chmodSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import type { FailureClass, FailureReport } from "./client.ts";
+
+/** One decision failure in the shim's audit log: what was asked, on which session, and why no decision came. */
+export interface FailureEntry { ts: string; cc_session: string; acs_session: string; method: string; class: FailureClass; detail: string }
 
 export interface CallState { request_id: string; tool: string; session: string }
 
@@ -74,6 +78,31 @@ export class StateDir {
 
   remove(session: string): void {
     rmSync(this.file(session), { force: true });
+  }
+
+  /** The deployment's own audit log of decision failures (ACS §6.4): one JSON line each, appended, kept
+   *  across sessions. It is written by the shim alone, so it records failures the Guardian never saw. */
+  get failureLog(): string {
+    return join(this.dir, "decision-failures.jsonl");
+  }
+
+  recordFailure(ccSession: string, f: FailureReport, now = new Date()): void {
+    const entry: FailureEntry = { ts: now.toISOString(), cc_session: ccSession, acs_session: f.session, method: f.method, class: f.failureClass, detail: f.detail };
+    appendFileSync(this.failureLog, JSON.stringify(entry) + "\n", { mode: 0o600 });
+  }
+
+  /** The failures recorded for a Claude Code session, counted per class, for sessionEnd's summary. */
+  failureCounts(ccSession: string): Partial<Record<FailureClass, number>> {
+    let raw: string;
+    try { raw = readFileSync(this.failureLog, "utf8"); } catch { return {}; }
+    const counts: Partial<Record<FailureClass, number>> = {};
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      let e: FailureEntry;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.cc_session === ccSession) counts[e.class] = (counts[e.class] ?? 0) + 1;
+    }
+    return counts;
   }
 
   /** Run `fn` holding this session's lock. A lock untouched for longer than staleMs belonged to a process that died. */

@@ -195,7 +195,10 @@ async function sessionEnd(ccSession: string, reason: unknown, o: ShimOptions): P
       if (!s) return;
       for (const a of Object.values(s.agents)) await endSubSession(s, a.session, a.agent_id, "cancelled", o).catch(() => undefined);
       const head = s.sessions[s.acs_session]?.chain_hash ?? null;
-      await o.client.call(s.acs_session, "steps/sessionEnd", { reason: endReason(reason), ...(head ? { final_chain_hash: head } : {}) }, head).catch(() => undefined);
+      // How many decision failures this session recorded, per class (§6.4): a session that ends without the
+      // count reads as unmeasurable, so it is sent even when it is empty.
+      const summary = { decision_failures: o.state.failureCounts(ccSession) };
+      await o.client.call(s.acs_session, "steps/sessionEnd", { reason: endReason(reason), summary, ...(head ? { final_chain_hash: head } : {}) }, head).catch(() => undefined);
       o.state.remove(ccSession);
     });
   } catch { /* nothing to answer: the session is over */ }

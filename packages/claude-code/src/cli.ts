@@ -66,8 +66,10 @@ let out;
 try {
   const config = readConfig(guardianPath);
   const secrets = loadSecrets(join(config.dataDir, "secrets.json"), false);
-  const client = new GuardianClient({ port: config.port, ikm: secrets.ikm, keyId: secrets.keyId, agentId: values.agent, requestTimeoutMs: 10_000 });
-  out = await runHook(input, { client, state: new StateDir(stateDir), deadline, approvalsUrl: `http://localhost:${config.port}/` });
+  const state = new StateDir(stateDir);
+  const ccSession = typeof input?.session_id === "string" ? input.session_id : "unknown";
+  const client = new GuardianClient({ port: config.port, ikm: secrets.ikm, keyId: secrets.keyId, agentId: values.agent, requestTimeoutMs: 10_000, onFailure: (f) => state.recordFailure(ccSession, f) });
+  out = await runHook(input, { client, state, deadline, approvalsUrl: `http://localhost:${config.port}/` });
 } catch (e) {
   fatal(e instanceof UnclassifiedHookError ? e.message : `can't reach the Guardian's configuration (${(e as Error).message}), so the call is denied`);
 }

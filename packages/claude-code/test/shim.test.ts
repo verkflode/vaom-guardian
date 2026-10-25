@@ -1,6 +1,6 @@
 // The shim against a real Guardian over HTTP on 127.0.0.1, on the 7D incident example: hook inputs shaped
 // as Claude Code sends them, decisions out, evidence checked with the Guardian's own verify.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGuardian, createGuardianServer, readConfig, Store, verifyEvidence, type Guardian } from "@verkflode/vaom-guardian-server";
 import { SoftAuthenticator } from "../../guardian/test/authenticator.ts";
-import { GuardianClient, runHook, StateDir, type ShimOptions } from "../src/index.ts";
+import { GuardianClient, runHook, StateDir, type FailureEntry, type ShimOptions } from "../src/index.ts";
 import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
@@ -206,6 +206,48 @@ describe("PreToolUse decisions", () => {
     const out = await runHook(pre("mcp__telemetry__query", { query: "x" }), o);
     expect(decision(out)).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/key_id/);
+  });
+
+  it("records every decision failure in its own audit log, and counts them per class at SessionEnd (§6.4)", async () => {
+    const r = await guardian();
+    const state = new StateDir(join(r.dir, "shim"));
+    const client = new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: r.g.secrets.keyId, agentId: AGENT, requestTimeoutMs: 5000, onFailure: (f) => state.recordFailure(CC, f) });
+    const sent: { method: string; payload: any }[] = [];
+    const call = client.call.bind(client);
+    client.call = (session, method, payload, chainHash, o) => { sent.push({ method, payload }); return call(session, method, payload, chainHash, o); };
+    const o = shim(r, { client, state });
+    await runHook({ hook_event_name: "SessionStart", session_id: CC, source: "startup" }, o);
+    expect(state.failureCounts(CC)).toEqual({});
+    await r.stop();
+    // The Guardian is gone: the call is denied, and the failure is in the shim's own log, which the
+    // Guardian never sees.
+    expect(decision(await runHook(restart(), o))).toBe("deny");
+    const log = readFileSync(state.failureLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as FailureEntry);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ cc_session: CC, method: "steps/toolCallRequest", class: "unreachable" });
+    expect(statSync(state.failureLog).mode & 0o777).toBe(0o600);
+    await runHook({ hook_event_name: "SessionEnd", session_id: CC, reason: "prompt_input_exit" }, o);
+    expect(sent.find((s) => s.method === "steps/sessionEnd")?.payload.summary).toEqual({ decision_failures: { unreachable: 1 } });
+  });
+
+  it("classifies an answer signed under another key_id as signature_invalid", async () => {
+    const r = await guardian();
+    const state = new StateDir(join(r.dir, "shim"));
+    const o = shim(r, { state, client: new GuardianClient({ port: r.port, ikm: r.g.secrets.ikm, keyId: r.g.secrets.keyId, agentId: AGENT, requestTimeoutMs: 5000, onFailure: (f) => state.recordFailure(CC, f) }) });
+    await runHook({ hook_event_name: "SessionStart", session_id: CC, source: "startup" }, o);
+    await r.stop();
+    const impostor = createServer((req, res) => {
+      let s = ""; req.on("data", (c) => (s += c)); req.on("end", () => {
+        const env = JSON.parse(s);
+        const answer = { jsonrpc: "2.0", id: env.id, result: { type: "final", acs_version: "0.1.0", request_id: env.params.request_id, decision: "allow", chain_hash: "0".repeat(64) } };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(sign(answer, sessionKey(r.g.secrets.ikm, env.params.metadata.session_id), "another-label")));
+      });
+    });
+    await new Promise<void>((res) => impostor.listen(r.port, "127.0.0.1", () => res()));
+    cleanup.push(() => impostor.close());
+    expect(decision(await runHook(restart(), o))).toBe("deny");
+    expect(state.failureCounts(CC)).toEqual({ signature_invalid: 1 });
   });
 
   it("answers allow and deny correctly for parallel calls on one session, with the chain intact", async () => {
