@@ -1,6 +1,6 @@
 {
   "name": "@verkflode/vaom-guardian-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Pure core of VAOM Guardian: linting, the evaluator, decision records, the cap ledger, execution contexts and leases, the Delegation Scorecard and boundary verification. No I/O, no eval, zero runtime dependencies; runs in Node and the browser.",
   "license": "Apache-2.0",

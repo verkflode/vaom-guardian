@@ -1,6 +1,6 @@
 {
   "name": "@verkflode/vaom-guardian-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "The VAOM Guardian process: the ACS endpoint over local HTTP, append-only evidence storage, and a local approval page where each approval takes a WebAuthn user-verified assertion. Node built-ins only.",
   "license": "Apache-2.0",

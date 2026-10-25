@@ -83,11 +83,11 @@ with `sudo sysadminctl -resetPasswordFor vaomagent`.
 
 ## 3. The code
 
-Use a commit that has `vaom-guardian shim-key` (it isn't in 0.1.0).
+Use 0.2.0 or later: `vaom-guardian shim-key` and the shim's `--key` and `--for-user` aren't in 0.1.0.
 
 ```sh
 sudo git clone https://github.com/verkflode/vaom-guardian.git /usr/local/vaom-guardian
-sudo git -C /usr/local/vaom-guardian checkout <commit or tag>
+sudo git -C /usr/local/vaom-guardian checkout v0.2.0
 cd /usr/local/vaom-guardian && sudo pnpm install --prod --frozen-lockfile --ignore-scripts
 ```
 

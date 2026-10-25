@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-26)
+
+The Guardian hardening: an approval page other accounts can't read, a decision saved whole or not at all,
+typed parsing of everything that arrives, and a tested setup with the Guardian under its own OS account.
+
+### Upgrading from 0.1.0
+
+- **Data directory:** a 0.1.0 data directory is read as it is; nothing to migrate. From the first start
+  on, 0.2.0 writes only `journal.jsonl`, which 0.1.0 doesn't read, so don't go back to 0.1.0 on the same
+  directory.
+- **Approval page:** open the `approvals` link the Guardian prints on start. It carries the run's page
+  token; the plain `http://localhost:<port>/` gets 401 from the page's API.
+- **Claude Code shim:** regenerate the hook settings (`settings`) so they name `node` by its absolute path.
+  Settings from 0.1.0 keep working.
+- **Compatibility:** still pinned to ACS v0.1.4 (commit `834f3f0d51e7`, specification text 0.1.0), and
+  every format version is unchanged.
+
+### Changes
 
 - **Separate-user setup:** `vaom-guardian shim-key` exports a key file for a shim running as another OS
   user (port, key id and ACS key, without the fact key; it refuses to print to a terminal), and the shim
