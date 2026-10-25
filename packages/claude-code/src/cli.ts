@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// vaom-guardian-claude-code hook     --guardian guardian.json --agent <agent id> [--state dir] [--deadline seconds]
-// vaom-guardian-claude-code settings --guardian guardian.json --agent <agent id> [--state dir] [--matcher regex]
+// vaom-guardian-claude-code hook     --guardian guardian.json | --key shim-key.json  --agent <agent id> [--state dir] [--deadline seconds]
+// vaom-guardian-claude-code settings --guardian guardian.json | --key shim-key.json  --agent <agent id> [--state dir] [--matcher regex]
+//
+// --guardian reads the Guardian's configuration and its secrets file: for a shim running as the same OS
+// user as the Guardian. --key reads a shim key file (`vaom-guardian shim-key`): for a Guardian running as
+// another user, whose data directory the shim (and the agent) can't read.
 //
 // `hook` is what Claude Code runs, once per hook call, with the hook input on stdin. Every path ends with
 // exit 0 and, for PreToolUse, an explicit decision on stdout. If even that fails (an uncaught error), it
@@ -9,7 +13,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { loadSecrets, readConfig } from "@verkflode/vaom-guardian-server";
+import { loadSecrets, loadShimKey, readConfig, type ShimKey } from "@verkflode/vaom-guardian-server";
 import { GuardianClient } from "./client.ts";
 import { runHook, UnclassifiedHookError } from "./hook.ts";
 import { hookSettings, HOOK_TIMEOUT_SECONDS } from "./settings.ts";
@@ -27,18 +31,18 @@ process.on("uncaughtException", (e) => fatal(`internal error (${e.message})`));
 process.on("unhandledRejection", (e) => fatal(`internal error (${(e as Error)?.message ?? e})`));
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
-  guardian: { type: "string" }, agent: { type: "string" }, state: { type: "string" }, deadline: { type: "string" }, matcher: { type: "string" },
+  guardian: { type: "string" }, key: { type: "string" }, agent: { type: "string" }, state: { type: "string" }, deadline: { type: "string" }, matcher: { type: "string" },
 } });
 const command = positionals[0];
-if ((command !== "hook" && command !== "settings") || !values.guardian || !values.agent) {
-  process.stderr.write("usage: vaom-guardian-claude-code hook|settings --guardian guardian.json --agent <agent id> [--state dir] [--deadline seconds] [--matcher regex]\n");
+if ((command !== "hook" && command !== "settings") || !values.agent || (values.guardian === undefined) === (values.key === undefined)) {
+  process.stderr.write("usage: vaom-guardian-claude-code hook|settings (--guardian guardian.json | --key shim-key.json) --agent <agent id> [--state dir] [--deadline seconds] [--matcher regex]\n");
   process.exit(2);
 }
-const guardianPath = resolve(values.guardian);
+const source = values.key !== undefined ? { key: resolve(values.key) } : { guardian: resolve(values.guardian!) };
 const stateDir = resolve(values.state ?? join(homedir(), ".vaom-guardian", "claude-code"));
 
 if (command === "settings") {
-  process.stdout.write(JSON.stringify(hookSettings({ script: import.meta.filename, guardian: guardianPath, agent: values.agent, state: stateDir, ...(values.matcher ? { matcher: values.matcher } : {}) }), null, 2) + "\n");
+  process.stdout.write(JSON.stringify(hookSettings({ node: process.execPath, script: import.meta.filename, ...source, agent: values.agent, state: stateDir, ...(values.matcher ? { matcher: values.matcher } : {}) }), null, 2) + "\n");
   process.exit(0);
 }
 
@@ -66,12 +70,17 @@ event = typeof fields.hook_event_name === "string" ? fields.hook_event_name : ""
 
 let out;
 try {
-  const config = readConfig(guardianPath);
-  const secrets = loadSecrets(join(config.dataDir, "secrets.json"), false);
+  let key: ShimKey;
+  if ("key" in source) key = loadShimKey(source.key);
+  else {
+    const config = readConfig(source.guardian);
+    const secrets = loadSecrets(join(config.dataDir, "secrets.json"), false);
+    key = { port: config.port, keyId: secrets.keyId, ikm: secrets.ikm };
+  }
   const state = new StateDir(stateDir);
   const ccSession = typeof fields.session_id === "string" ? fields.session_id : "unknown";
-  const client = new GuardianClient({ port: config.port, ikm: secrets.ikm, keyId: secrets.keyId, agentId: values.agent, requestTimeoutMs: 10_000, onFailure: (f) => state.recordFailure(ccSession, f) });
-  out = await runHook(input, { client, state, deadline, approvalsUrl: `http://localhost:${config.port}/` });
+  const client = new GuardianClient({ port: key.port, ikm: key.ikm, keyId: key.keyId, agentId: values.agent, requestTimeoutMs: 10_000, onFailure: (f) => state.recordFailure(ccSession, f) });
+  out = await runHook(input, { client, state, deadline, approvalsUrl: `http://localhost:${key.port}/` });
 } catch (e) {
   fatal(e instanceof UnclassifiedHookError ? e.message : `can't reach the Guardian's configuration (${(e as Error).message}), so the call is denied`);
 }

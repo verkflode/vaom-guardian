@@ -1,6 +1,6 @@
 // The shim against a real Guardian over HTTP on 127.0.0.1, on the 7D incident example: hook inputs shaped
 // as Claude Code sends them, decisions out, evidence checked with the Guardian's own verify.
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import { sessionKey, sign } from "@verkflode/vaom-guardian-acs";
 
 const examples = join(import.meta.dirname, "..", "..", "..", "schema", "examples");
 const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
+const GUARDIAN_CLI = join(import.meta.dirname, "..", "..", "guardian", "src", "cli.ts");
 const CC = "5d1c1b0e-6a0c-4c51-9d0e-2f0f6c1d7a10"; // a Claude Code session id
 const AGENT = "incident-agent";
 
@@ -528,6 +529,29 @@ describe("the CLI, as Claude Code runs it", () => {
     const res = await run(["hook", "--guardian", r.config, "--agent", AGENT, "--state", join(r.dir, "cli-state")], JSON.stringify(pre("mcp__telemetry__query", { query: "x" })));
     expect(res.code, res.stderr).toBe(0);
     expect(decision(JSON.parse(res.stdout))).toBe("allow");
+  });
+
+  it("reads a shim key file instead of the Guardian's data directory, and refuses one others can read", async () => {
+    const r = await guardian();
+    const exported = spawnSync(process.execPath, [GUARDIAN_CLI, "shim-key", "--config", r.config], { encoding: "utf8" });
+    expect(exported.status, exported.stderr).toBe(0);
+    expect(exported.stdout).not.toContain("fact_key");
+    const key = join(r.dir, "shim-key.json");
+    writeFileSync(key, exported.stdout, { mode: 0o600 });
+    const args = ["hook", "--key", key, "--agent", AGENT, "--state", join(r.dir, "cli-state")];
+    const res = await run(args, JSON.stringify(pre("mcp__telemetry__query", { query: "x" })));
+    expect(res.code, res.stderr).toBe(0);
+    expect(decision(JSON.parse(res.stdout))).toBe("allow");
+    chmodSync(key, 0o644);
+    const open = await run(args, JSON.stringify(pre("mcp__telemetry__query", { query: "x" })));
+    expect(open.code).toBe(2);
+    expect(decision(JSON.parse(open.stdout))).toBe("deny");
+    expect(open.stderr).toMatch(/readable by other users/);
+    const settings = await run(["settings", "--key", key, "--agent", AGENT], "");
+    const command: string = JSON.parse(settings.stdout).hooks.PreToolUse[0].hooks[0].command;
+    expect(command).toContain(`--key '${key}'`);
+    expect(command.startsWith(`'${process.execPath}' `)).toBe(true);
+    expect((await run(["settings", "--key", key, "--guardian", r.config, "--agent", AGENT], "")).code).toBe(2);
   });
 
   it("denies with exit 0 and explicit JSON when the Guardian is down", async () => {

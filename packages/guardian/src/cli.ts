@@ -5,20 +5,23 @@
 // vaom-guardian probe import --config guardian.json result.json [result.json...]
 // vaom-guardian credentials --config guardian.json
 // vaom-guardian revoke --config guardian.json <credential-id>
+// vaom-guardian shim-key --config guardian.json > <the shim's key file>
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { scorecard, type Metric, type ProbeResult } from "@verkflode/vaom-guardian-core";
 import { checkConfig, createGuardian, readConfig } from "./guardian.ts";
 import { listCredentials, revokeCredential } from "./credentials.ts";
+import { loadSecrets, shimKeyFile } from "./secrets.ts";
 import { importProbeResults, verifyEvidence } from "./evidence.ts";
 import { createGuardianServer } from "./server.ts";
 import { Store } from "./store.ts";
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: { config: { type: "string" }, enroll: { type: "string" }, from: { type: "string" }, to: { type: "string" }, json: { type: "boolean" } } });
 const command = positionals[0];
-const known = ["serve", "verify", "scorecard", "credentials", "revoke"];
+const known = ["serve", "verify", "scorecard", "credentials", "revoke", "shim-key"];
 if (!values.config || !(known.includes(command ?? "") || (command === "probe" && positionals[1] === "import"))) {
-  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]\n       vaom-guardian probe import --config guardian.json result.json [...]\n       vaom-guardian credentials --config guardian.json\n       vaom-guardian revoke --config guardian.json <credential-id>");
+  console.error("usage: vaom-guardian serve --config guardian.json [--enroll label:role,role]\n       vaom-guardian verify --config guardian.json\n       vaom-guardian scorecard --config guardian.json [--from ISO] [--to ISO] [--json]\n       vaom-guardian probe import --config guardian.json result.json [...]\n       vaom-guardian credentials --config guardian.json\n       vaom-guardian revoke --config guardian.json <credential-id>\n       vaom-guardian shim-key --config guardian.json > <the shim's key file>");
   process.exit(2);
 }
 const config = readConfig(values.config);
@@ -54,6 +57,15 @@ if (command === "revoke") {
     console.log(`revoked ${c.id} (${c.label}); a running Guardian refuses it from its next approval`);
     process.exit(0);
   } catch (e) { console.error((e as Error).message); process.exit(1); }
+}
+
+if (command === "shim-key") {
+  // For a shim running as another OS user. Written to a pipe or file only: a key printed on a terminal
+  // stays in its scrollback.
+  if (process.stdout.isTTY) { console.error("shim-key: redirect the output into the shim's key file (it holds the ACS key), e.g. > shim-key.json"); process.exit(2); }
+  new Store(config.dataDir); // creates the data directory (0700) if the Guardian has never run
+  process.stdout.write(shimKeyFile(loadSecrets(resolve(config.dataDir, "secrets.json"), true), config.port));
+  process.exit(0);
 }
 
 if (command === "probe") {

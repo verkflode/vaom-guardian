@@ -8,12 +8,16 @@
 //   the agent's project can't override it.
 export const HOOK_TIMEOUT_SECONDS = 600;
 
-export interface SettingsInput { script: string; guardian: string; agent: string; state: string; matcher?: string }
+/** Where the shim finds the Guardian: its configuration (same OS user) or a shim key file (another user).
+ *  `node` is the interpreter's absolute path, so the hook doesn't run whichever `node` comes first on the
+ *  agent's PATH. */
+export type SettingsInput = { node: string; script: string; agent: string; state: string; matcher?: string } & ({ guardian: string } | { key: string });
 
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export function hookSettings(i: SettingsInput): unknown {
-  const command = ["node", quote(i.script), "hook", "--guardian", quote(i.guardian), "--agent", quote(i.agent), "--state", quote(i.state)].join(" ");
+  const source = "key" in i ? ["--key", quote(i.key)] : ["--guardian", quote(i.guardian)];
+  const command = [quote(i.node), quote(i.script), "hook", ...source, "--agent", quote(i.agent), "--state", quote(i.state)].join(" ");
   const tool = (timeout: number) => [{ matcher: i.matcher ?? "*", hooks: [{ type: "command", command, timeout }] }];
   const session = (timeout: number) => [{ hooks: [{ type: "command", command, timeout }] }];
   return {

@@ -19,3 +19,27 @@ export function loadSecrets(path: string, create: boolean): Secrets {
   if (ikm.length < 32 || factKey.length < 32 || typeof j.key_id !== "string") throw new Error(`${path} is malformed`);
   return { ikm, factKey, keyId: j.key_id };
 }
+
+export const SHIM_KEY_FORMAT = "vaom-guardian.shim-key/0.1";
+
+/** What a shim needs and nothing more: where the Guardian listens and the ACS key, without the fact key. */
+export interface ShimKey { port: number; keyId: string; ikm: Uint8Array }
+
+/**
+ * The shim's key file, for a shim that runs as another OS user than the Guardian and so can't read the
+ * Guardian's data directory. It holds the ACS pre-shared key, which the agent's account then holds too:
+ * whoever has it can sign as the shim, or answer as a Guardian when none is listening on the port.
+ */
+export function shimKeyFile(secrets: Secrets, port: number): string {
+  return JSON.stringify({ format: SHIM_KEY_FORMAT, port, key_id: secrets.keyId, ikm: Buffer.from(secrets.ikm).toString("base64") }, null, 2) + "\n";
+}
+
+/** Read a shim key file. Like secrets.json, it must be readable by its owner only. */
+export function loadShimKey(path: string): ShimKey {
+  const mode = statSync(path).mode & 0o777;
+  if (mode & 0o077) throw new Error(`${path} is readable by other users (mode ${mode.toString(8)}); chmod 600 it`);
+  const j = JSON.parse(readFileSync(path, "utf8"));
+  const ikm = new Uint8Array(Buffer.from(String(j?.ikm ?? ""), "base64"));
+  if (j?.format !== SHIM_KEY_FORMAT || !Number.isInteger(j.port) || j.port < 1024 || j.port > 65535 || typeof j.key_id !== "string" || ikm.length < 32) throw new Error(`${path} is not a ${SHIM_KEY_FORMAT} file`);
+  return { port: j.port, keyId: j.key_id, ikm };
+}
