@@ -20,7 +20,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Each target: the schemas to compile, the export names, the output file, and whether the schemas are ours
 // (full strict mode) or vendored (strict mode off, since we don't control their keywords; formats still asserted).
-const ACS = "packages/acs/vendor/acs-v0.1.2/specification/v0.1.0";
+const ACS = "packages/acs/vendor/acs-v0.1.4/specification/v0.1.0";
 const ACS_ID = "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0";
 const targets = [
   {

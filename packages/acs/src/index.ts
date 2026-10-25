@@ -1,4 +1,4 @@
-// VAOM Guardian's ACS wire adapter, pinned to ACS v0.1.2 (spec text 0.1.0). Pure: no I/O.
+// VAOM Guardian's ACS wire adapter, pinned to ACS v0.1.4 (spec text 0.1.0). Pure: no I/O.
 export { ACS_PIN, ACS_SPEC_VERSION, acceptsVersion } from "./version.ts";
 export { AcsError, ERR } from "./errors.ts";
 export { fromBase64, toBase64 } from "./base64.ts";

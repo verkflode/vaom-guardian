@@ -4,5 +4,5 @@ Copyright 2026 Verkflöde
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This product includes JSON Schemas from the OWASP Agent Control Standard
-(https://github.com/GenAI-Security-Project/agent-control-standard, tag v0.1.2),
-licensed under the Apache License, Version 2.0, in packages/acs/vendor/acs-v0.1.2/.
+(https://github.com/GenAI-Security-Project/agent-control-standard, tag v0.1.4),
+licensed under the Apache License, Version 2.0, in packages/acs/vendor/acs-v0.1.4/.
