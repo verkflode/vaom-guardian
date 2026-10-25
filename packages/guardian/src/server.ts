@@ -163,13 +163,15 @@ export function createGuardianServer(g: Guardian, now: () => number = Date.now):
     try { env = JSON.parse(raw); } catch { /* the endpoint already answered PARSE */ }
     const session: string = env?.params?.metadata?.session_id ?? "";
     try {
-      g.store.appendRecords(h.records);
-      g.store.appendChain(h.entries.map((entry) => ({ session, entry })));
       const ts = new Date(t).toISOString();
-      g.store.appendEvents([
-        ...h.incidents.map((i) => ({ type: "incident", id: crypto.randomUUID(), ts, ...i })),
-        ...h.spawns.map((s) => ({ type: "spawn", id: crypto.randomUUID(), ts, ...s })),
-      ]);
+      g.store.commit({
+        records: h.records,
+        chain: h.entries.map((entry) => ({ session, entry })),
+        events: [
+          ...h.incidents.map((i) => ({ type: "incident", id: crypto.randomUUID(), ts, ...i })),
+          ...h.spawns.map((s) => ({ type: "spawn", id: crypto.randomUUID(), ts, ...s })),
+        ],
+      });
     } catch {
       return g.endpoint.persistFailed(h, session);
     }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Storage:** one journal, `journal.jsonl`, with everything one step writes on a single line, replaces
+  the three files. A decision's record, chain entry and events are now saved together or not at all, so
+  a failed write can no longer leave a record without its chain entry. A 0.1.0 data directory is still
+  read; its files are never written again.
+- **Approval page:** listing, challenging, approving and rejecting asks take a per-run page token, which
+  the Guardian prints in the approvals link on its terminal. Other accounts on the machine can no longer
+  read pending asks or reject them.
+- **`system/ping`:** answered as ACS §13 describes, after the version check, with a status payload. It is
+  still unsigned and outside the chain.
+
 ## 0.1.0 (2026-10-25)
 
 The first tagged release of the VAOM Guardian: a reference implementation of the

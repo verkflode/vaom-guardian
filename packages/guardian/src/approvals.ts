@@ -219,8 +219,7 @@ export class Approvals {
       return { seededError: a.seed.error };
     }
     const resolved = this.o.endpoint.close(session, requestId, "rejected", new Date(now).toISOString());
-    this.o.store.appendRecords([resolved]);
-    this.o.store.appendEvents([this.event("rejection", { decision: a.record.id, session, request_id: requestId, authenticated: false }, now)]);
+    this.o.store.commit({ records: [resolved], events: [this.event("rejection", { decision: a.record.id, session, request_id: requestId, authenticated: false }, now)] });
     this.settle(a, "rejected", now);
     return {};
   }
@@ -248,8 +247,7 @@ export class Approvals {
         continue;
       }
       const resolved = this.o.endpoint.close(a.session, a.requestId, "expired", new Date(now).toISOString());
-      this.o.store.appendRecords([resolved]);
-      this.o.store.appendEvents([this.event("expiry", { decision: a.record.id, session: a.session, request_id: a.requestId }, now)]);
+      this.o.store.commit({ records: [resolved], events: [this.event("expiry", { decision: a.record.id, session: a.session, request_id: a.requestId }, now)] });
       this.settle(a, "expired", now);
     }
   }

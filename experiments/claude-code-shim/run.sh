@@ -52,9 +52,9 @@ echo "$out" > "$dir/result.json"
 kill $gpid 2>/dev/null; wait $gpid 2>/dev/null
 
 ran=$([ -s "$marker" ] || [ -e "$dir/CANARY" ] && echo yes || echo no)
-record=$(python3 - "$dir/guardian/data/records.jsonl" <<'PY'
+record=$(python3 - "$dir/guardian/data/journal.jsonl" <<'PY'
 import json,sys
-try: lines=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+try: lines=[r for l in open(sys.argv[1]) if l.strip() for r in json.loads(l).get("records", [])]
 except FileNotFoundError: print("none"); sys.exit()
 last={}
 for r in lines: last[r["id"]]=r

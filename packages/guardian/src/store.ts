@@ -1,13 +1,18 @@
-// Append-only evidence storage: one JSON object per line, fsynced before the Guardian answers.
-//   records.jsonl   decision records; a resolution appends the record again (the last line per id wins)
-//   chain.jsonl     ACS context entries, with their session
-//   events.jsonl    enrollments, approvals, rejections, expiries and incidents
+// Append-only evidence storage: journal.jsonl, one commit per line, fsynced before the Guardian answers.
+// A commit holds everything one step writes, in up to three lists:
+//   records   decision records; a resolution writes the record again (the last version per id wins)
+//   chain     ACS context entries, with their session
+//   events    enrollments, approvals, rejections, expiries and incidents
+// One line per commit makes a decision's record, chain entry and events one write: a line is either whole
+// or torn, never half a decision.
 // Nothing is rewritten in place. A torn last line (a crash mid-write) is skipped on load; damage anywhere
 // else stops the Guardian from starting, because cap usage can't be trusted from a damaged history.
-// Before the first append after a start, a file's tail is made whole: a complete last line missing its
-// newline gets one, and a torn partial line is cut off. A torn line was never answered on (every append is
-// fsynced before the Guardian answers), so nothing acknowledged is lost, and the next append can't be glued
+// Before the first commit after a start, the journal's tail is made whole: a complete last line missing its
+// newline gets one, and a torn partial line is cut off. A torn line was never answered on (every commit is
+// fsynced before the Guardian answers), so nothing acknowledged is lost, and the next commit can't be glued
 // onto it.
+// A data directory from 0.1.0 holds records.jsonl, chain.jsonl and events.jsonl, one object per line. They
+// are read, before the journal, and never written again.
 import { closeSync, existsSync, fsyncSync, ftruncateSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextEntry } from "@verkflode/vaom-guardian-acs";
@@ -16,6 +21,11 @@ import type { DecisionRecord } from "@verkflode/vaom-guardian-core";
 export type GuardianEvent = { type: string; id: string; ts: string } & Record<string, unknown>;
 
 export interface ChainLine { session: string; entry: ContextEntry }
+
+/** What one step writes, all at once. */
+export interface Commit { records?: readonly DecisionRecord[]; chain?: readonly ChainLine[]; events?: readonly GuardianEvent[] }
+
+const JOURNAL = "journal.jsonl";
 
 export class Store {
   readonly dir: string;
@@ -55,12 +65,18 @@ export class Store {
     }
   }
 
-  private append(name: string, lines: readonly unknown[]): void {
-    if (lines.length === 0) return;
-    this.repairTail(name);
-    const fd = openSync(this.path(name), "a", 0o600);
+  /** Write one step's records, chain entries and events as a single fsynced line. */
+  commit(c: Commit): void {
+    const line: Commit = {
+      ...(c.records?.length ? { records: c.records } : {}),
+      ...(c.chain?.length ? { chain: c.chain } : {}),
+      ...(c.events?.length ? { events: c.events } : {}),
+    };
+    if (Object.keys(line).length === 0) return;
+    this.repairTail(JOURNAL);
+    const fd = openSync(this.path(JOURNAL), "a", 0o600);
     try {
-      writeSync(fd, lines.map((l) => JSON.stringify(l) + "\n").join(""));
+      writeSync(fd, JSON.stringify(line) + "\n");
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -87,16 +103,26 @@ export class Store {
     return out;
   }
 
-  appendRecords(records: readonly DecisionRecord[]): void { this.append("records.jsonl", records); }
-  appendChain(lines: readonly ChainLine[]): void { this.append("chain.jsonl", lines); }
-  appendEvents(events: readonly GuardianEvent[]): void { this.append("events.jsonl", events); }
+  appendRecords(records: readonly DecisionRecord[]): void { this.commit({ records }); }
+  appendEvents(events: readonly GuardianEvent[]): void { this.commit({ events }); }
+
+  /** Every list in write order: a 0.1.0 directory's three files first, then the journal. */
+  private all<K extends keyof Commit>(key: K, legacy: string): NonNullable<Commit[K]>[number][] {
+    const out: NonNullable<Commit[K]>[number][] = [...this.read<NonNullable<Commit[K]>[number]>(legacy)];
+    for (const c of this.read<Commit>(JOURNAL)) {
+      const list = c?.[key];
+      if (list !== undefined && !Array.isArray(list)) throw new Error(`${JOURNAL} holds a commit whose ${key} is not a list; refusing to start on a damaged history`);
+      if (list) out.push(...list);
+    }
+    return out;
+  }
 
   /** The latest version of every record, in first-seen order. */
   records(): DecisionRecord[] {
     const byId = new Map<string, DecisionRecord>();
-    for (const r of this.read<DecisionRecord>("records.jsonl")) byId.set(r.id, r);
+    for (const r of this.all("records", "records.jsonl")) byId.set(r.id, r);
     return [...byId.values()];
   }
-  chain(): ChainLine[] { return this.read<ChainLine>("chain.jsonl"); }
-  events(): GuardianEvent[] { return this.read<GuardianEvent>("events.jsonl"); }
+  chain(): ChainLine[] { return this.all("chain", "chain.jsonl"); }
+  events(): GuardianEvent[] { return this.all("events", "events.jsonl"); }
 }

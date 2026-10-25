@@ -288,9 +288,9 @@ describe("approvals can't be forged or reused", () => {
     await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: ask.requestId, exit_status: "success", outputs: [] });
     expect(verifyEvidence(g.store, g.origin).problems).toEqual([]);
 
-    const ev = join(g.config.dataDir, "events.jsonl");
+    const ev = join(g.config.dataDir, "journal.jsonl");
     const original = readFileSync(ev, "utf8");
-    writeFileSync(ev, original.replace(/"approver_role":"sre-lead"/, '"approver_role":"head-of-engineering"'));
+    writeFileSync(ev, original.replace(/("type":"approval"[^\n]*?)"approver_role":"sre-lead"/, '$1"approver_role":"head-of-engineering"'));
     expect(verifyEvidence(g.store, g.origin).problems.join("\n")).toMatch(/approval .*(doesn't hold|different decision)/);
     writeFileSync(ev, original);
 
@@ -301,16 +301,11 @@ describe("approvals can't be forged or reused", () => {
     // An enrollment edited to drop the role the approval used.
     expect(tampered(/"roles":\["sre-lead"\]/, '"roles":["head-of-engineering"]')).toMatch(/doesn't hold sre-lead/);
     // A record whose approval reference points nowhere.
-    const recs = join(g.config.dataDir, "records.jsonl");
-    const recOriginal = readFileSync(recs, "utf8");
-    const apId = /"approval":\{[^}]*"record":"([^"]+)"/.exec(recOriginal)![1]!;
-    writeFileSync(recs, recOriginal.split(apId).join("00000000-0000-4000-8000-000000000000"));
-    expect(verifyEvidence(g.store, g.origin).problems.join("\n")).toMatch(/executed without a verifiable approval/);
-    writeFileSync(recs, recOriginal);
+    const apId = /"approval":\{[^}]*"record":"([^"]+)"/.exec(original)![1]!;
+    expect(tampered(new RegExp(`"record":"${apId}"`, "g"), '"record":"00000000-0000-4000-8000-000000000000"')).toMatch(/executed without a verifiable approval/);
     expect(verifyEvidence(g.store, g.origin).problems).toEqual([]);
 
-    const ch = join(g.config.dataDir, "chain.jsonl");
-    writeFileSync(ch, readFileSync(ch, "utf8").replace('"step_type":"toolCallRequest"', '"step_type":"turnStart"'));
+    writeFileSync(ev, original.replace('"step_type":"toolCallRequest"', '"step_type":"turnStart"'));
     expect(verifyEvidence(g.store, g.origin).problems.join("\n")).toMatch(/hash chain does not verify/);
   });
 });
@@ -349,9 +344,9 @@ describe("reject, expire, recover", () => {
     await call("steps/toolCallRequest", restart("INC-8"));
     first.server.close();
     open.splice(open.findIndex((o) => o.server === first.server), 1);
-    const recs = join(first.g.config.dataDir, "records.jsonl");
+    const recs = join(first.g.config.dataDir, "journal.jsonl");
     const good = readFileSync(recs, "utf8");
-    writeFileSync(recs, good + '{"id":"torn');
+    writeFileSync(recs, good + '{"records":[{"id":"torn');
     const ok = await start(first.dir);
     ok.server.close();
     open.splice(open.findIndex((o) => o.server === ok.server), 1);
@@ -361,18 +356,44 @@ describe("reject, expire, recover", () => {
   });
 });
 
+describe("one journal line per commit", () => {
+  it("a decision's record, chain entry and events are one line, so a torn write loses all of them or none", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    await call("steps/toolCallRequest", restart("INC-7"));
+    const last = JSON.parse(readFileSync(join(g.config.dataDir, "journal.jsonl"), "utf8").trimEnd().split("\n").at(-1)!);
+    expect(last.records).toHaveLength(1);
+    expect(last.chain).toEqual([expect.objectContaining({ session: S1, entry: expect.objectContaining({ step_type: "toolCallRequest" }) })]);
+  });
+  it("a 0.1.0 data directory's three files are read before the journal, and never written", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
+    const ev = (id: string) => ({ type: "note", id, ts: "2026-10-12T00:00:00Z" });
+    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("old")) + "\n");
+    new Store(dir).appendEvents([ev("new")]);
+    expect(new Store(dir).events().map((e) => e.id)).toEqual(["old", "new"]);
+    expect(readFileSync(join(dir, "events.jsonl"), "utf8")).toBe(JSON.stringify(ev("old")) + "\n");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  it("a commit whose list isn't a list is damage", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
+    writeFileSync(join(dir, "journal.jsonl"), '{"events":{"type":"note"}}\n');
+    expect(() => new Store(dir).events()).toThrow(/damaged/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("a torn tail is repaired before the next append, so it can't glue onto it", () => {
   const ev = (id: string) => ({ type: "note", id, ts: "2026-10-12T00:00:00Z" });
   it("a complete last line missing its newline keeps its record", () => {
     const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
-    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("a")));
+    writeFileSync(join(dir, "journal.jsonl"), JSON.stringify({ events: [ev("a")] }));
     new Store(dir).appendEvents([ev("b")]);
     expect(new Store(dir).events().map((e) => e.id)).toEqual(["a", "b"]);
     rmSync(dir, { recursive: true, force: true });
   });
   it("a torn partial line, never answered on, is cut off", () => {
     const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
-    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("a")) + "\n" + '{"type":"no');
+    writeFileSync(join(dir, "journal.jsonl"), JSON.stringify({ events: [ev("a")] }) + "\n" + '{"events":[{"type":"no');
     new Store(dir).appendEvents([ev("b")]);
     expect(new Store(dir).events().map((e) => e.id)).toEqual(["a", "b"]);
     rmSync(dir, { recursive: true, force: true });
@@ -383,7 +404,7 @@ describe("persistence failure answers with an error, never the decision", () => 
   it("when records can't be written", async () => {
     const { g, port } = await start();
     const call = await session(g, port);
-    g.store.appendRecords = () => { throw new Error("disk full"); };
+    g.store.commit = () => { throw new Error("disk full"); };
     const r = await call("steps/toolCallRequest", restart("INC-7"));
     expect(r.result).toBeUndefined();
     expect(r.error.code).toBe(-32603);
@@ -589,9 +610,10 @@ describe("fixes from review: memory, seeding timing, verify and revocation", () 
     const { g, port } = await start();
     const call = await session(g, port);
     await call("steps/toolCallRequest", restart("INC-7"));
-    const chain = join(g.config.dataDir, "chain.jsonl");
-    const lines = readFileSync(chain, "utf8").trimEnd().split("\n");
-    writeFileSync(chain, lines.slice(0, -1).join("\n") + "\n");
+    const journal = join(g.config.dataDir, "journal.jsonl");
+    const lines = readFileSync(journal, "utf8").trimEnd().split("\n");
+    const { chain: _cut, ...rest } = JSON.parse(lines.at(-1)!);
+    writeFileSync(journal, [...lines.slice(0, -1), JSON.stringify(rest)].join("\n") + "\n");
     expect(verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n")).toMatch(/missing from session/);
   });
 
@@ -622,12 +644,12 @@ describe("fixes from review: memory, seeding timing, verify and revocation", () 
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
     const auth = await enroll(g, port, ["sre-lead"]);
     expect((await approveWith(port, auth, S1, ask.requestId)).status).toBe(200);
-    const events = join(g.config.dataDir, "events.jsonl");
-    const lines = readFileSync(events, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
-    const approval = lines.find((e) => e.type === "approval");
+    const journal = join(g.config.dataDir, "journal.jsonl");
+    const commits = readFileSync(journal, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+    const approval = commits.flatMap((c) => c.events ?? []).find((e: any) => e.type === "approval");
     const revocation = { type: "credential-revoked", id: "rv", ts: "2026-10-01T00:00:00Z", credential_id: approval.credential_id };
-    const reordered = [...lines.filter((e) => e !== approval), revocation, approval, { ...approval, id: "ghost", decision: "no-such-decision" }];
-    writeFileSync(events, reordered.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const reordered = [...commits.map((c) => ({ ...c, ...(c.events ? { events: c.events.filter((e: any) => e.id !== approval.id) } : {}) })), { events: [revocation] }, { events: [approval] }, { events: [{ ...approval, id: "ghost", decision: "no-such-decision" }] }];
+    writeFileSync(journal, reordered.map((c) => JSON.stringify(c)).join("\n") + "\n");
     const problems = verifyEvidence(new Store(g.config.dataDir), g.origin).problems.join("\n");
     expect(problems).toMatch(/after it was revoked/);
     expect(problems).toMatch(/has no record/);

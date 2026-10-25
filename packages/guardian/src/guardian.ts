@@ -110,13 +110,15 @@ export function createGuardian(config: GuardianFileConfig, now: number = Date.no
   const expired = store.records()
     .filter((r) => !r.resolution && (r.decision.outcome === "review" || r.decision.outcome === "escalate") && !approved.has(r.id))
     .map((r) => resolveRecord(r, { ts, result: "expired" }));
-  store.appendRecords(expired);
   // Seeds planted before an unclean stop were never decided: they expire, like the asks around them.
   const seedEvents = store.events();
   const decidedSeeds = new Set(seedEvents.filter((e) => e.type === "seed-outcome").map((e) => e.decision as string));
-  store.appendEvents(seedEvents.filter((e) => e.type === "seed-planted" && !decidedSeeds.has(e.decision as string)).map((e) => ({
-    type: "seed-outcome", id: randomUUID(), ts, seed: e.seed, set: e.set, row: e.row, decision: e.decision, session: e.session, request_id: e.request_id, result: "expired", recovered: true,
-  })));
+  store.commit({
+    records: expired,
+    events: seedEvents.filter((e) => e.type === "seed-planted" && !decidedSeeds.has(e.decision as string)).map((e) => ({
+      type: "seed-outcome", id: randomUUID(), ts, seed: e.seed, set: e.set, row: e.row, decision: e.decision, session: e.session, request_id: e.request_id, result: "expired", recovered: true,
+    })),
+  });
 
   const ledger = new CapLedger();
   ledger.load(store.records());
