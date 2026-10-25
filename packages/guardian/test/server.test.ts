@@ -382,6 +382,28 @@ describe("one journal line per commit", () => {
   });
 });
 
+describe("reading events from a cursor", () => {
+  const ev = (id: string) => ({ type: "note", id, ts: "2026-10-12T00:00:00Z" });
+  it("returns what was committed after the cursor, leaves a line still being written for next time, and refuses a journal that shrank", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vaom-store-"));
+    writeFileSync(join(dir, "events.jsonl"), JSON.stringify(ev("old")) + "\n");
+    const s = new Store(dir);
+    s.appendEvents([ev("a")]);
+    const all = s.eventsSince();
+    expect(all.events.map((e) => e.id)).toEqual(["old", "a"]);
+    expect(s.eventsSince(all.cursor).events).toEqual([]);
+    s.commit({ events: [ev("b"), ev("c")] });
+    const journal = join(dir, "journal.jsonl");
+    writeFileSync(journal, readFileSync(journal, "utf8") + '{"events":[{"type":"no');
+    const next = s.eventsSince(all.cursor);
+    expect(next.events.map((e) => e.id)).toEqual(["b", "c"]);
+    expect(s.eventsSince(next.cursor).events).toEqual([]);
+    writeFileSync(journal, JSON.stringify({ events: [ev("a")] }) + "\n");
+    expect(() => s.eventsSince(next.cursor)).toThrow(/damaged/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("a torn tail is repaired before the next append, so it can't glue onto it", () => {
   const ev = (id: string) => ({ type: "note", id, ts: "2026-10-12T00:00:00Z" });
   it("a complete last line missing its newline keeps its record", () => {
@@ -630,12 +652,28 @@ describe("fixes from review: memory, seeding timing, verify and revocation", () 
     const { g, port } = await start();
     const call = await session(g, port);
     const auth = await enroll(g, port, ["sre-lead"]);
-    const [cred] = listCredentials(g.store);
-    revokeCredential(g.store, cred!.id, Date.now());
-    expect(() => revokeCredential(g.store, cred!.id, Date.now())).toThrow(/already revoked/);
+    const cli = new Store(g.config.dataDir); // the CLI's own view of the data directory
+    const [cred] = listCredentials(cli);
+    revokeCredential(cli, cred!.id, Date.now());
+    expect(() => revokeCredential(cli, cred!.id, Date.now())).toThrow(/already revoked/);
     const ask = await call("steps/toolCallRequest", restart("INC-7"));
     expect((await approveWith(port, auth, S1, ask.requestId)).status).toBe(403);
     expect(listCredentials(g.store)[0]).toMatchObject({ revoked: expect.any(String) });
+  });
+
+  it("approving reads only what the store gained since the last look, not the whole history", async () => {
+    const { g, port } = await start();
+    const call = await session(g, port);
+    const auth = await enroll(g, port, ["sre-lead"]);
+    g.store.events = () => { throw new Error("re-read the whole history"); };
+    const first = await call("steps/toolCallRequest", restart("INC-7"));
+    expect((await approveWith(port, auth, S1, first.requestId)).status).toBe(200);
+    await call("steps/toolCallResult", { tool: { name: "mcp__deploy__rolling_restart" }, request_id_ref: first.requestId, exit_status: "success", outputs: [] });
+    const cli = new Store(g.config.dataDir);
+    revokeCredential(cli, listCredentials(cli)[0]!.id, Date.now());
+    const second = await call("steps/toolCallRequest", restart("INC-7"));
+    expect(second.result.decision).toBe("ask");
+    expect((await approveWith(port, auth, S1, second.requestId)).status).toBe(403);
   });
 
   it("verify flags an approval made after its credential's revocation, and one whose decision has no record", async () => {

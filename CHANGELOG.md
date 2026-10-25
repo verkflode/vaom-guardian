@@ -6,6 +6,9 @@
   the three files. A decision's record, chain entry and events are now saved together or not at all, so
   a failed write can no longer leave a record without its chain entry. A 0.1.0 data directory is still
   read; its files are never written again.
+- **Revocation:** before accepting an approval, a running Guardian reads only what the journal gained
+  since its last look, instead of the whole event history, so a revocation from the CLI still takes
+  effect at once without the cost growing with every decision.
 - **Approval page:** listing, challenging, approving and rejecting asks take a per-run page token, which
   the Guardian prints in the approvals link on its terminal. Other accounts on the machine can no longer
   read pending asks or reject them.

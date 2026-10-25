@@ -125,4 +125,44 @@ export class Store {
   }
   chain(): ChainLine[] { return this.all("chain", "chain.jsonl"); }
   events(): GuardianEvent[] { return this.all("events", "events.jsonl"); }
+
+  /**
+   * Events, with a cursor for reading only what's new: without `cursor`, every event and the journal's
+   * current end; with one, the events committed after it, by this process or another (the CLI revokes
+   * credentials while a Guardian runs). Only complete lines count: one still being written is read next
+   * time. A journal shorter than the cursor has been rewritten, which is damage.
+   */
+  eventsSince(cursor?: number): { events: GuardianEvent[]; cursor: number } {
+    const legacy = cursor === undefined ? this.read<GuardianEvent>("events.jsonl") : [];
+    const from = cursor ?? 0;
+    const p = this.path(JOURNAL);
+    if (!existsSync(p)) {
+      if (from > 0) throw new Error(`${JOURNAL} is gone; refusing to go on with a damaged history`);
+      return { events: legacy, cursor: 0 };
+    }
+    const fd = openSync(p, "r");
+    let bytes: Buffer;
+    try {
+      const size = fstatSync(fd).size;
+      if (size < from) throw new Error(`${JOURNAL} is shorter than when it was last read; refusing to go on with a damaged history`);
+      bytes = Buffer.alloc(size - from);
+      for (let at = 0; at < bytes.length;) {
+        const n = readSync(fd, bytes, at, bytes.length - at, from + at);
+        if (n === 0) break;
+        at += n;
+      }
+    } finally {
+      closeSync(fd);
+    }
+    const end = bytes.lastIndexOf(0x0a) + 1;
+    const events: GuardianEvent[] = [...legacy];
+    for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
+      if (line === "") continue;
+      let c: Commit;
+      try { c = JSON.parse(line); } catch { throw new Error(`${JOURNAL} has a damaged line; refusing to go on with a damaged history`); }
+      if (c?.events !== undefined && !Array.isArray(c.events)) throw new Error(`${JOURNAL} holds a commit whose events is not a list; refusing to go on with a damaged history`);
+      if (c?.events) events.push(...c.events);
+    }
+    return { events, cursor: from + end };
+  }
 }

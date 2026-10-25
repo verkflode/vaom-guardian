@@ -72,11 +72,15 @@ export class Approvals {
   private readonly waiters = new Map<string, Set<(s: AskStatus) => void>>();
   private scheduled: Planned[] = [];
   private enroll: EnrollToken | undefined;
+  /** How far into the store's events the credentials have been brought up to date. */
+  private seen: number;
 
   constructor(o: ApprovalsOptions) {
     this.o = o;
     // Credentials are rebuilt from the event log: enrollments, then counters from later approvals.
-    for (const e of o.store.events()) {
+    const { events, cursor } = o.store.eventsSince();
+    this.seen = cursor;
+    for (const e of events) {
       if (e.type === "enrolled") this.credentials.set(e.credential_id as string, { id: e.credential_id as string, label: e.label as string, roles: e.roles as string[], jwk: e.jwk as Jwk, signCount: e.sign_count as number });
       if (e.type === "approval" || (e.type === "seed-outcome" && e.result === "missed")) { const c = this.credentials.get(e.credential_id as string); if (c) c.signCount = e.sign_count as number; }
       if (e.type === "credential-revoked") this.credentials.delete(e.credential_id as string);
@@ -172,10 +176,12 @@ export class Approvals {
     const ch = this.challenges.get(k);
     this.challenges.delete(k); // single use, whatever happens next
     if (!ch || ch.expiresAt <= now) throw new ApprovalError(409, "no live challenge for this approval; request a new one");
-    // A revocation may have been appended by the CLI while this Guardian runs: read it from the store, so
-    // revoking takes effect without a restart. (Each append is one write in append mode, so lines from the
-    // two processes don't interleave.)
-    for (const e of this.o.store.events()) if (e.type === "credential-revoked") this.credentials.delete(e.credential_id as string);
+    // A revocation may have been committed by the CLI while this Guardian runs: read what the store gained
+    // since the last look (not the whole history), so revoking takes effect without a restart. (Each commit
+    // is one write in append mode, so lines from the two processes don't interleave.)
+    const since = this.o.store.eventsSince(this.seen);
+    this.seen = since.cursor;
+    for (const e of since.events) if (e.type === "credential-revoked") this.credentials.delete(e.credential_id as string);
     const cred = this.credentials.get(assertion?.credentialId);
     if (!cred) throw new ApprovalError(403, "unknown or revoked credential");
     const role = a.record.decision.approver_role!;
