@@ -6,11 +6,16 @@
 // user as the Guardian. --key reads a shim key file (`vaom-guardian shim-key`): for a Guardian running as
 // another user, whose data directory the shim (and the agent) can't read.
 //
+// --for-user <account> makes the hook a no-op (no output, exit 0: no opinion) for every OS account but that
+// one. Claude Code's managed settings apply to every account on the machine, so this is how one agent's
+// account is governed without changing Claude Code for the others. The account is the process's real one
+// (from the system's user database by uid), which nothing in the environment changes.
+//
 // `hook` is what Claude Code runs, once per hook call, with the hook input on stdin. Every path ends with
 // exit 0 and, for PreToolUse, an explicit decision on stdout. If even that fails (an uncaught error), it
 // exits 2, which Claude Code also treats as a block. A hard timer answers deny before Claude Code's own
 // hook timeout can turn silence into "no opinion".
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { loadSecrets, loadShimKey, readConfig, type ShimKey } from "@verkflode/vaom-guardian-server";
@@ -31,20 +36,23 @@ process.on("uncaughtException", (e) => fatal(`internal error (${e.message})`));
 process.on("unhandledRejection", (e) => fatal(`internal error (${(e as Error)?.message ?? e})`));
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
-  guardian: { type: "string" }, key: { type: "string" }, agent: { type: "string" }, state: { type: "string" }, deadline: { type: "string" }, matcher: { type: "string" },
+  guardian: { type: "string" }, key: { type: "string" }, agent: { type: "string" }, state: { type: "string" }, deadline: { type: "string" }, matcher: { type: "string" }, "for-user": { type: "string" },
 } });
 const command = positionals[0];
 if ((command !== "hook" && command !== "settings") || !values.agent || (values.guardian === undefined) === (values.key === undefined)) {
-  process.stderr.write("usage: vaom-guardian-claude-code hook|settings (--guardian guardian.json | --key shim-key.json) --agent <agent id> [--state dir] [--deadline seconds] [--matcher regex]\n");
+  process.stderr.write("usage: vaom-guardian-claude-code hook|settings (--guardian guardian.json | --key shim-key.json) --agent <agent id> [--state dir] [--deadline seconds] [--matcher regex] [--for-user account]\n");
   process.exit(2);
 }
 const source = values.key !== undefined ? { key: resolve(values.key) } : { guardian: resolve(values.guardian!) };
 const stateDir = resolve(values.state ?? join(homedir(), ".vaom-guardian", "claude-code"));
 
 if (command === "settings") {
-  process.stdout.write(JSON.stringify(hookSettings({ node: process.execPath, script: import.meta.filename, ...source, agent: values.agent, state: stateDir, ...(values.matcher ? { matcher: values.matcher } : {}) }), null, 2) + "\n");
+  process.stdout.write(JSON.stringify(hookSettings({ node: process.execPath, script: import.meta.filename, ...source, agent: values.agent, state: stateDir, ...(values.matcher ? { matcher: values.matcher } : {}), ...(values["for-user"] ? { forUser: values["for-user"] } : {}) }), null, 2) + "\n");
   process.exit(0);
 }
+
+// Another account than the governed one: no opinion, before anything else is read.
+if (values["for-user"] !== undefined && userInfo().username !== values["for-user"]) process.exit(0);
 
 const started = Date.now();
 const deadlineSeconds = Number(values.deadline ?? HOOK_TIMEOUT_SECONDS - 30);

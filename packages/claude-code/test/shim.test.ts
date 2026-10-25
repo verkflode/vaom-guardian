@@ -3,7 +3,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGuardian, createGuardianServer, readConfig, Store, verifyEvidence, type Guardian } from "@verkflode/vaom-guardian-server";
@@ -552,6 +552,19 @@ describe("the CLI, as Claude Code runs it", () => {
     expect(command).toContain(`--key '${key}'`);
     expect(command.startsWith(`'${process.execPath}' `)).toBe(true);
     expect((await run(["settings", "--key", key, "--guardian", r.config, "--agent", AGENT], "")).code).toBe(2);
+  });
+
+  it("--for-user: no opinion for any other OS account, the shim as usual for that one", async () => {
+    const r = await guardian();
+    await r.stop();
+    const me = userInfo().username;
+    const args = ["hook", "--guardian", r.config, "--agent", AGENT, "--state", join(r.dir, "cli-state")];
+    const other = await run([...args, "--for-user", `not-${me}`], JSON.stringify(pre("Bash", { command: "x" })));
+    expect(other).toMatchObject({ code: 0, stdout: "" });
+    const mine = await run([...args, "--for-user", me], JSON.stringify(pre("Bash", { command: "x" })));
+    expect(decision(JSON.parse(mine.stdout))).toBe("deny");
+    const settings = await run(["settings", "--guardian", r.config, "--agent", AGENT, "--for-user", "vaomagent"], "");
+    expect(JSON.parse(settings.stdout).hooks.PreToolUse[0].hooks[0].command).toMatch(/--for-user 'vaomagent'$/);
   });
 
   it("denies with exit 0 and explicit JSON when the Guardian is down", async () => {

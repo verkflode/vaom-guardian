@@ -47,8 +47,9 @@ Why these owners:
 
 - **Nothing the Guardian runs may be writable by the agent.** Homebrew's `/opt/homebrew` belongs to the
   user who installed it, so a Homebrew `node` is replaceable by that user. Use the nodejs.org installer.
-- **The agent must not be an administrator.** The `admin` group can write to `/Library/Application Support`,
-  which holds the managed settings.
+- **The agent must not be an administrator.** An administrator can make system-wide changes with its
+  password (`sudo`, installers, System Settings), including to the managed settings; the agent needs none
+  of that.
 - **Claude Code is root-owned** so the agent can't swap its own host for one that skips hooks. Updates
   then need an administrator, so automatic updates are switched off in the managed settings.
 
@@ -114,8 +115,9 @@ sudo -u vaomguardian tee /Users/vaomguardian/guardian/guardian.json > /dev/null 
   "activation": { "incident-agent": { "rows": ["remediation.restart"], "task": "INC-7" } }
 }
 JSON
-G="sudo -u vaomguardian -H /usr/local/bin/node /usr/local/vaom-guardian/packages/guardian/src/cli.ts"
-$G verify --config /Users/vaomguardian/guardian/guardian.json
+# A function, not a variable: zsh (the macOS default) doesn't split a variable into words.
+G() { sudo -u vaomguardian -H /usr/local/bin/node /usr/local/vaom-guardian/packages/guardian/src/cli.ts "$@"; }
+G verify --config /Users/vaomguardian/guardian/guardian.json
 ```
 
 ## 5. The shim's key
@@ -126,7 +128,7 @@ refuses to print to a terminal, so pipe it straight into the agent's file:
 ```sh
 sudo -v   # so the two sudo commands in the pipe don't both ask for your password
 sudo -u vaomagent mkdir -m 700 /Users/vaomagent/.vaom-guardian
-$G shim-key --config /Users/vaomguardian/guardian/guardian.json \
+G shim-key --config /Users/vaomguardian/guardian/guardian.json \
   | sudo -u vaomagent sh -c 'umask 077; cat > /Users/vaomagent/.vaom-guardian/shim-key.json'
 ```
 
@@ -139,7 +141,7 @@ Print the hooks for the agent, then add the managed-only settings to them:
 ```sh
 sudo -u vaomagent -H /usr/local/bin/node /usr/local/vaom-guardian/packages/claude-code/src/cli.ts settings \
   --key /Users/vaomagent/.vaom-guardian/shim-key.json --agent incident-agent \
-  --state /Users/vaomagent/.vaom-guardian/claude-code > /tmp/vaom-hooks.json
+  --state /Users/vaomagent/.vaom-guardian/claude-code --for-user vaomagent > /tmp/vaom-hooks.json
 ```
 
 Add the managed-only keys, and install the result:
@@ -151,11 +153,18 @@ Add the managed-only keys, and install the result:
   fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");'
 sudo mkdir -p "/Library/Application Support/ClaudeCode"
 sudo install -m 644 -o root -g wheel /tmp/vaom-hooks.json "/Library/Application Support/ClaudeCode/managed-settings.json"
+rm /tmp/vaom-hooks.json
 ```
+
+Managed settings apply to every account on the Mac: Claude Code has no per-user managed settings. The
+hooks carry `--for-user vaomagent`, so for any other account the shim answers nothing (no opinion) and
+Claude Code works as it would without them. The managed-only settings below aren't per-user, though:
+under other accounts too, Claude Code ignores hooks and allow-rules from user and project settings.
 
 What each part does:
 
-- **The hooks** run the shim with the absolute path of the root-owned `node`.
+- **The hooks** run the shim with the absolute path of the root-owned `node`, for `vaomagent` only. The
+  shim checks its real account, from the system's user database, so the agent can't pass for another.
 - **`permissions.disableBypassPermissionsMode`** keeps bypass mode off.
 - **`allowManagedHooksOnly`** blocks hooks from user, project, local and plugin settings, so nothing runs
   beside the shim.
@@ -170,7 +179,7 @@ them).
 In a terminal you keep open:
 
 ```sh
-$G serve --config /Users/vaomguardian/guardian/guardian.json --enroll owner:sre-lead
+G serve --config /Users/vaomguardian/guardian/guardian.json --enroll owner:sre-lead
 ```
 
 It prints the approvals link (with this run's page token) and a one-time enrolment link. Both use
@@ -208,8 +217,8 @@ Run as the agent (`sudo -iu vaomagent`) unless it says otherwise. Each line says
 | 10 | `claude --dangerously-skip-permissions` | bypass mode refused |
 | 11 | `disableAllHooks: true` in `~/.claude/settings.json`, then 8 again | still denied |
 | 12 | Guardian stopped, then 7 again | denied |
-| 13 | As an administrator: `$G verify --config …` | no problems |
-| 14 | Boundary probes (`vaom-probe run`) as the agent, imported with `$G probe import` | results imported |
+| 13 | As an administrator: `G verify --config …` | no problems |
+| 14 | Boundary probes (`vaom-probe run`) as the agent, imported with `G probe import` | results imported |
 
 Checks 7 to 9 need the agent project from [`experiments/claude-code-shim/`](../experiments/claude-code-shim/)
 (its MCP stubs) or your own tools bound in the binding.
